@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.services.product_discovery import ProductDiscoveryService
 
 
 def test_health_and_analysis() -> None:
@@ -43,6 +44,23 @@ def test_catalog_product_detail_and_missing_product_response() -> None:
     assert detail.json()["ingredient_text"]
     assert detail.json()["source_name"]
     assert missing.status_code == 404
+
+
+def test_catalog_empty_barcode_and_external_unavailable_states(monkeypatch) -> None:
+    with TestClient(app) as client:
+        no_match = client.get("/api/v1/products", params={"barcode": "123"})
+    assert no_match.status_code == 200
+    assert no_match.json() == []
+    assert no_match.headers["X-Catalog-Result"] == "no_match"
+
+    async def unavailable(*_args, **_kwargs):
+        return [], "external_unavailable"
+
+    monkeypatch.setattr(ProductDiscoveryService, "search", unavailable)
+    with TestClient(app) as client:
+        unavailable_response = client.get("/api/v1/products", params={"query": "unavailable-product"})
+    assert unavailable_response.status_code == 200
+    assert unavailable_response.headers["X-Catalog-Result"] == "external_unavailable"
 
 
 def test_catalog_search_supports_barcode_category_and_source_metadata() -> None:

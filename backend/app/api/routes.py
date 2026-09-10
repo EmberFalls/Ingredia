@@ -1,6 +1,6 @@
 import json
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -51,6 +51,7 @@ def ingredient_detail(ingredient_id: str, db: Session = Depends(get_db)) -> Ingr
 
 @router.get("/products", response_model=list[ProductOut])
 async def search_products(
+    response: Response,
     query: str | None = None,
     brand: str | None = None,
     category: str | None = None,
@@ -59,7 +60,8 @@ async def search_products(
     db: Session = Depends(get_db),
 ) -> list[ProductOut]:
     """Search the internal catalog by product, brand, category, or barcode."""
-    products = await ProductDiscoveryService(db).search(query=query, brand=brand, category=category, barcode=barcode, limit=min(max(limit, 1), 50))
+    products, catalog_status = await ProductDiscoveryService(db).search(query=query, brand=brand, category=category, barcode=barcode, limit=min(max(limit, 1), 50))
+    response.headers["X-Catalog-Result"] = catalog_status
     return [_product_out(product) for product in products]
 
 

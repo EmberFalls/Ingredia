@@ -8,6 +8,10 @@ from app.core.config import get_settings
 from app.providers.products import ProviderProduct
 
 
+class ProductProviderUnavailable(RuntimeError):
+    """The public catalog could not be reached or returned a server error."""
+
+
 class OpenFoodFactsProvider:
     """Read-only adapter for the Open Food Facts public catalog.
 
@@ -68,7 +72,13 @@ class OpenFoodFactsProvider:
                 response.raise_for_status()
                 payload = response.json()
                 return payload if isinstance(payload, dict) else None
-        except (httpx.HTTPError, ValueError):
+        except httpx.HTTPStatusError as error:
+            if error.response.status_code == 404:
+                return None
+            raise ProductProviderUnavailable("Open Food Facts returned an unavailable response") from error
+        except httpx.RequestError as error:
+            raise ProductProviderUnavailable("Open Food Facts could not be reached") from error
+        except ValueError:
             return None
 
     def _normalize(self, item: dict[str, object]) -> ProviderProduct | None:
