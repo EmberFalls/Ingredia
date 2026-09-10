@@ -1,4 +1,6 @@
 allowBuilds:
   esbuild: true
   sharp: true
+  # The package's optional post-install script is not needed for browser OCR.
+  tesseract.js: false
   workerd: true

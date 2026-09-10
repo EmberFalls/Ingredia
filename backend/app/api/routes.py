@@ -1,15 +1,19 @@
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.db.database import get_db
-from app.db.models import Ingredient, IngredientAlias, Product, UserSensitivity
+from app.db.models import BrandSource, Ingredient, IngredientAlias, Product, ScanHistory, UserProfile, UserSensitivity
 from app.schemas import (
     AnalyzeTextRequest, AnalyzeTextResponse, CompareRequest, CompareResponse,
-    IngredientOut, PreferenceOut, PreferenceRequest, ProductAnalysisRequest, ProductOut,
+    BrandSourceOut, HistoryItemOut, IngredientOut, PreferenceOut, PreferenceRequest, ProductAnalysisRequest, ProductOut,
+    UserProfileOut, UserProfileRequest,
 )
 from app.services.analysis import AnalysisService
 from app.services.normalizer import IngredientNormalizer
+from app.services.product_discovery import ProductDiscoveryService
 
 router = APIRouter()
 
@@ -46,15 +50,26 @@ def ingredient_detail(ingredient_id: str, db: Session = Depends(get_db)) -> Ingr
 
 
 @router.get("/products", response_model=list[ProductOut])
-def search_products(query: str, db: Session = Depends(get_db)) -> list[ProductOut]:
-    """Find local catalog products by either product name or company/brand."""
-    if not query.strip():
-        return []
-    term = f"%{query.strip()}%"
-    products = db.scalars(
-        select(Product).where(or_(Product.name.ilike(term), Product.brand.ilike(term))).order_by(Product.brand, Product.name).limit(20)
-    ).all()
+async def search_products(
+    query: str | None = None,
+    brand: str | None = None,
+    category: str | None = None,
+    barcode: str | None = None,
+    limit: int = 20,
+    db: Session = Depends(get_db),
+) -> list[ProductOut]:
+    """Search the internal catalog by product, brand, category, or barcode."""
+    products = await ProductDiscoveryService(db).search(query=query, brand=brand, category=category, barcode=barcode, limit=min(max(limit, 1), 50))
     return [_product_out(product) for product in products]
+
+
+@router.get("/brands", response_model=list[BrandSourceOut])
+def search_brands(query: str | None = None, db: Session = Depends(get_db)) -> list[BrandSourceOut]:
+    statement = select(BrandSource).order_by(BrandSource.brand_name).limit(20)
+    if query and query.strip():
+        statement = statement.where(BrandSource.brand_name.ilike(f"%{query.strip()}%"))
+    brands = db.scalars(statement).all()
+    return [_brand_out(brand) for brand in brands]
 
 
 @router.get("/products/{product_id}", response_model=ProductOut)
@@ -70,10 +85,17 @@ def analyze_product(product_id: str, request: ProductAnalysisRequest, db: Sessio
     product = db.get(Product, product_id)
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
+    if not product.ingredient_text.strip():
+        raise HTTPException(status_code=409, detail="Product identified, but its ingredient label is unavailable. Paste or upload the label to continue.")
     return AnalysisService(db).analyze(AnalyzeTextRequest(
         ingredient_text=product.ingredient_text,
-        product_name=f"{product.brand} {product.name}",
+        product_id=product.id,
+        product_name=product.name,
+        product_brand=product.brand,
         product_category=product.category,
+        product_image_url=product.image_url,
+        product_source_name=product.source_name,
+        product_source_type=product.source_type,
         user_id=request.user_id,
         save_to_history=request.save_to_history,
     ))
@@ -91,6 +113,50 @@ def add_preference(user_id: str, request: PreferenceRequest, db: Session = Depen
         db.add(UserSensitivity(user_id=user_id, ingredient_id=resolved.ingredient.id, preference_type=request.preference_type))
     db.commit()
     return PreferenceOut(ingredient_id=resolved.ingredient.id, canonical_name=resolved.ingredient.canonical_name, preference_type=request.preference_type)
+
+
+@router.get("/users/{user_id}/preferences", response_model=list[PreferenceOut])
+def get_preferences(user_id: str, db: Session = Depends(get_db)) -> list[PreferenceOut]:
+    rows = db.execute(
+        select(UserSensitivity, Ingredient)
+        .join(Ingredient, UserSensitivity.ingredient_id == Ingredient.id)
+        .where(UserSensitivity.user_id == user_id)
+        .order_by(Ingredient.canonical_name)
+    ).all()
+    return [
+        PreferenceOut(ingredient_id=ingredient.id, canonical_name=ingredient.canonical_name, preference_type=sensitivity.preference_type)
+        for sensitivity, ingredient in rows
+    ]
+
+
+@router.get("/users/{user_id}/profile", response_model=UserProfileOut)
+def get_profile(user_id: str, db: Session = Depends(get_db)) -> UserProfileOut:
+    profile = db.scalar(select(UserProfile).where(UserProfile.user_id == user_id))
+    return _profile_out(profile, user_id)
+
+
+@router.put("/users/{user_id}/profile", response_model=UserProfileOut)
+def save_profile(user_id: str, request: UserProfileRequest, db: Session = Depends(get_db)) -> UserProfileOut:
+    profile = db.scalar(select(UserProfile).where(UserProfile.user_id == user_id))
+    if not profile:
+        profile = UserProfile(user_id=user_id)
+        db.add(profile)
+    profile.display_name = request.display_name
+    profile.avatar_url = request.avatar_url
+    profile.dietary_preferences = json.dumps(request.dietary_preferences)
+    profile.cultural_considerations = json.dumps(request.cultural_considerations)
+    profile.additional_requirements = request.additional_requirements
+    db.commit()
+    db.refresh(profile)
+    return _profile_out(profile, user_id)
+
+
+@router.get("/users/{user_id}/history", response_model=list[HistoryItemOut])
+def get_history(user_id: str, limit: int = 30, db: Session = Depends(get_db)) -> list[HistoryItemOut]:
+    rows = db.scalars(
+        select(ScanHistory).where(ScanHistory.user_id == user_id).order_by(ScanHistory.created_at.desc()).limit(min(max(limit, 1), 100))
+    ).all()
+    return [_history_out(row) for row in rows]
 
 
 @router.post("/comparisons", response_model=CompareResponse)
@@ -118,5 +184,44 @@ def _ingredient_out(item: Ingredient) -> IngredientOut:
 def _product_out(item: Product) -> ProductOut:
     return ProductOut(
         id=item.id, name=item.name, brand=item.brand, category=item.category,
-        ingredient_text=item.ingredient_text, image_url=item.image_url, description=item.description,
+        barcode=item.barcode, ingredient_text=item.ingredient_text, image_url=item.image_url, description=item.description,
+        source_type=item.source_type, source_name=item.source_name, source_url=item.source_url,
+        source_confidence=item.source_confidence, label_verified_at=item.label_verified_at,
+        source_retrieved_at=item.source_retrieved_at, is_demo=item.is_demo,
+        ingredients_available=bool(item.ingredient_text.strip()),
     )
+
+
+def _brand_out(item: BrandSource) -> BrandSourceOut:
+    return BrandSourceOut(
+        id=item.id, brand_name=item.brand_name, canonical_domain=item.canonical_domain, country=item.country,
+        search_strategy=item.search_strategy, enabled=item.enabled,
+    )
+
+
+def _profile_out(item: UserProfile | None, user_id: str) -> UserProfileOut:
+    if not item:
+        return UserProfileOut(user_id=user_id)
+    return UserProfileOut(
+        user_id=user_id, display_name=item.display_name, avatar_url=item.avatar_url,
+        dietary_preferences=_json_list(item.dietary_preferences),
+        cultural_considerations=_json_list(item.cultural_considerations),
+        additional_requirements=item.additional_requirements,
+    )
+
+
+def _history_out(item: ScanHistory) -> HistoryItemOut:
+    return HistoryItemOut(
+        id=item.id, product_id=item.product_id, product_name=item.product_name, product_brand=item.product_brand,
+        product_category=item.product_category, product_image_url=item.product_image_url,
+        product_source_name=item.product_source_name, product_source_type=item.product_source_type,
+        raw_text=item.raw_text, concern_score=item.concern_score, coverage=item.coverage, created_at=item.created_at,
+    )
+
+
+def _json_list(value: str) -> list[str]:
+    try:
+        decoded = json.loads(value)
+        return decoded if isinstance(decoded, list) and all(isinstance(item, str) for item in decoded) else []
+    except (TypeError, json.JSONDecodeError):
+        return []

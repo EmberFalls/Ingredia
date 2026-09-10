@@ -63,13 +63,31 @@ class UserSensitivity(Base):
     ingredient: Mapped[Ingredient] = relationship()
 
 
+class UserProfile(Base):
+    __tablename__ = "user_profiles"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    display_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    avatar_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    dietary_preferences: Mapped[str] = mapped_column(Text, default="[]")
+    cultural_considerations: Mapped[str] = mapped_column(Text, default="[]")
+    additional_requirements: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class ScanHistory(Base):
     __tablename__ = "scan_history"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     user_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
     product_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    product_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    product_brand: Mapped[str | None] = mapped_column(String(160), nullable=True)
     product_category: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    product_image_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    product_source_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    product_source_type: Mapped[str | None] = mapped_column(String(40), nullable=True)
     raw_text: Mapped[str] = mapped_column(Text)
     concern_score: Mapped[int] = mapped_column(Integer)
     coverage: Mapped[float] = mapped_column(Float)
@@ -90,6 +108,32 @@ class Product(Base):
     name: Mapped[str] = mapped_column(String(160), index=True)
     brand: Mapped[str] = mapped_column(String(160), index=True)
     category: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    barcode: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     ingredient_text: Mapped[str] = mapped_column(Text)
     image_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_type: Mapped[str] = mapped_column(String(40), default="demo")
+    source_name: Mapped[str] = mapped_column(String(160), default="Local development catalog")
+    source_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    source_confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    label_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    source_retrieved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    is_demo: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class BrandSource(Base):
+    """A registered brand source for future provider and official-site adapters."""
+
+    __tablename__ = "brand_sources"
+    __table_args__ = (UniqueConstraint("brand_name", "canonical_domain", name="uq_brand_source"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    brand_name: Mapped[str] = mapped_column(String(160), index=True)
+    canonical_domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    country: Mapped[str | None] = mapped_column(String(2), nullable=True)
+    search_strategy: Mapped[str] = mapped_column(String(40), default="MANUAL_ONLY")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    rate_limit_per_minute: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    terms_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

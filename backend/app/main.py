@@ -6,12 +6,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import router
 from app.core.config import get_settings
 from app.db.database import Base, SessionLocal, engine
+from app.db.migrations import apply_local_schema_migrations
 from app.db.seed import seed_database
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     Base.metadata.create_all(bind=engine)
+    apply_local_schema_migrations(engine)
     with SessionLocal() as session:
         seed_database(session)
     yield

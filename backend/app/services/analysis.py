@@ -83,7 +83,13 @@ class AnalysisService:
             disclaimer=DISCLAIMER,
         )
         if request.save_to_history:
-            self.db.add(ScanHistory(user_id=request.user_id, product_name=request.product_name, product_category=request.product_category, raw_text=request.ingredient_text, concern_score=product_score.score, coverage=coverage))
+            self.db.add(ScanHistory(
+                user_id=request.user_id, product_id=request.product_id, product_name=request.product_name,
+                product_brand=request.product_brand, product_category=request.product_category,
+                product_image_url=request.product_image_url, product_source_name=request.product_source_name,
+                product_source_type=request.product_source_type, raw_text=request.ingredient_text,
+                concern_score=product_score.score, coverage=coverage,
+            ))
             self.db.commit()
         return response
 

@@ -1,7 +1,7 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import EvidenceRecord, Ingredient, IngredientAlias, Product
+from app.db.models import BrandSource, EvidenceRecord, Ingredient, IngredientAlias, Product
 from app.services.normalizer import normalize_key
 
 
@@ -20,11 +20,16 @@ SEED_INGREDIENTS = [
 # These are clearly-labelled fictional catalog records. They make the local
 # experience testable without presenting unverified real-world label data.
 SEED_PRODUCTS = [
-    {"name": "Daily Face Cleanser", "brand": "Calmline", "category": "personal_care", "ingredient_text": "Aqua, Glycerin, Niacinamide, Phenoxyethanol", "description": "A gentle, daily-use cleanser."},
-    {"name": "Citrus Body Wash", "brand": "Calmline", "category": "personal_care", "ingredient_text": "Aqua, Glycerin, Parfum, Limonene, Phenoxyethanol", "description": "A citrus-scented body wash."},
-    {"name": "Color Care Shampoo", "brand": "Calmline", "category": "personal_care", "ingredient_text": "Aqua, Glycerin, Parfum, CI 19140, Limonene", "description": "A color-care shampoo with a fragrance label."},
-    {"name": "Lemon Refresher", "brand": "Northstar Pantry", "category": "food", "ingredient_text": "Water, Sugar, Sodium Benzoate (E211), Tartrazine (E102)", "description": "A lemon-flavoured drink."},
-    {"name": "Creamy Spread", "brand": "Northstar Pantry", "category": "food", "ingredient_text": "Water, Lecithin (INS 322), Sodium Benzoate", "description": "A plant-based creamy spread."},
+    {"name": "Daily Face Cleanser", "brand": "Calmline", "category": "personal_care", "barcode": "000000000001", "ingredient_text": "Aqua, Glycerin, Niacinamide, Phenoxyethanol", "description": "A gentle, daily-use cleanser.", "source_type": "demo", "source_name": "Local development catalog", "source_confidence": 0.0, "is_demo": True},
+    {"name": "Citrus Body Wash", "brand": "Calmline", "category": "personal_care", "barcode": "000000000002", "ingredient_text": "Aqua, Glycerin, Parfum, Limonene, Phenoxyethanol", "description": "A citrus-scented body wash.", "source_type": "demo", "source_name": "Local development catalog", "source_confidence": 0.0, "is_demo": True},
+    {"name": "Color Care Shampoo", "brand": "Calmline", "category": "personal_care", "barcode": "000000000003", "ingredient_text": "Aqua, Glycerin, Parfum, CI 19140, Limonene", "description": "A color-care shampoo with a fragrance label.", "source_type": "demo", "source_name": "Local development catalog", "source_confidence": 0.0, "is_demo": True},
+    {"name": "Lemon Refresher", "brand": "Northstar Pantry", "category": "food", "barcode": "000000000004", "ingredient_text": "Water, Sugar, Sodium Benzoate (E211), Tartrazine (E102)", "description": "A lemon-flavoured drink.", "source_type": "demo", "source_name": "Local development catalog", "source_confidence": 0.0, "is_demo": True},
+    {"name": "Creamy Spread", "brand": "Northstar Pantry", "category": "food", "barcode": "000000000005", "ingredient_text": "Water, Lecithin (INS 322), Sodium Benzoate", "description": "A plant-based creamy spread.", "source_type": "demo", "source_name": "Local development catalog", "source_confidence": 0.0, "is_demo": True},
+]
+
+SEED_BRAND_SOURCES = [
+    {"brand_name": "Calmline", "search_strategy": "MANUAL_ONLY", "enabled": False, "terms_notes": "Fictional development brand; no external site is queried."},
+    {"brand_name": "Northstar Pantry", "search_strategy": "MANUAL_ONLY", "enabled": False, "terms_notes": "Fictional development brand; no external site is queried."},
 ]
 
 
@@ -38,7 +43,14 @@ def seed_database(db: Session) -> None:
         db.add(ingredient)
     db.flush()
     for item in SEED_PRODUCTS:
-        exists = db.scalar(select(Product.id).where(Product.name == item["name"], Product.brand == item["brand"]))
-        if not exists:
+        product = db.scalar(select(Product).where(Product.name == item["name"], Product.brand == item["brand"]))
+        if not product:
             db.add(Product(**item))
+        elif product.is_demo:
+            for field, value in item.items():
+                setattr(product, field, value)
+    for item in SEED_BRAND_SOURCES:
+        exists = db.scalar(select(BrandSource.id).where(BrandSource.brand_name == item["brand_name"]))
+        if not exists:
+            db.add(BrandSource(**item))
     db.commit()

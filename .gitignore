@@ -8,3 +8,4 @@ __pycache__/
 backend/.python-deps/
 backend/*.db
 backend/.env
+.pnpm-store/

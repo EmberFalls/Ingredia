@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from pydantic import BaseModel, Field
 
 
@@ -24,7 +26,12 @@ class IngredientOut(BaseModel):
 class AnalyzeTextRequest(BaseModel):
     ingredient_text: str = Field(min_length=1, max_length=20_000)
     product_name: str | None = Field(default=None, max_length=160)
+    product_id: str | None = Field(default=None, max_length=36)
+    product_brand: str | None = Field(default=None, max_length=160)
     product_category: str | None = Field(default=None, max_length=80)
+    product_image_url: str | None = Field(default=None, max_length=500)
+    product_source_name: str | None = Field(default=None, max_length=160)
+    product_source_type: str | None = Field(default=None, max_length=40)
     user_id: str | None = Field(default=None, max_length=100)
     save_to_history: bool = False
 
@@ -73,9 +80,27 @@ class ProductOut(BaseModel):
     name: str
     brand: str
     category: str | None
+    barcode: str | None
     ingredient_text: str
     image_url: str | None
     description: str | None
+    source_type: str
+    source_name: str
+    source_url: str | None
+    source_confidence: float
+    label_verified_at: datetime | None
+    source_retrieved_at: datetime | None
+    is_demo: bool
+    ingredients_available: bool
+
+
+class BrandSourceOut(BaseModel):
+    id: str
+    brand_name: str
+    canonical_domain: str | None
+    country: str | None
+    search_strategy: str
+    enabled: bool
 
 
 class ProductAnalysisRequest(BaseModel):
@@ -92,6 +117,34 @@ class PreferenceOut(BaseModel):
     ingredient_id: str
     canonical_name: str
     preference_type: str
+
+
+class UserProfileRequest(BaseModel):
+    display_name: str | None = Field(default=None, max_length=120)
+    # Local mode accepts a small data URL so an avatar can persist without an upload service.
+    avatar_url: str | None = Field(default=None, max_length=2_500_000)
+    dietary_preferences: list[str] = Field(default_factory=list, max_length=30)
+    cultural_considerations: list[str] = Field(default_factory=list, max_length=30)
+    additional_requirements: str | None = Field(default=None, max_length=2_000)
+
+
+class UserProfileOut(UserProfileRequest):
+    user_id: str
+
+
+class HistoryItemOut(BaseModel):
+    id: str
+    product_id: str | None
+    product_name: str | None
+    product_brand: str | None
+    product_category: str | None
+    product_image_url: str | None
+    product_source_name: str | None
+    product_source_type: str | None
+    raw_text: str
+    concern_score: int
+    coverage: float
+    created_at: datetime | None
 
 
 class CompareRequest(BaseModel):
