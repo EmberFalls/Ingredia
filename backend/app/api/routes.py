@@ -5,10 +5,10 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.db.database import get_db
-from app.db.models import BrandSource, Ingredient, IngredientAlias, Product, ScanHistory, UserProfile, UserSensitivity
+from app.db.models import BrandSource, CatalogReport, Ingredient, IngredientAlias, Product, ScanHistory, UserProfile, UserSensitivity
 from app.schemas import (
     AnalyzeTextRequest, AnalyzeTextResponse, CompareRequest, CompareResponse,
-    BrandSourceOut, HistoryItemOut, IngredientOut, PreferenceOut, PreferenceRequest, ProductAnalysisRequest, ProductOut,
+    BrandSourceOut, CatalogReportOut, CatalogReportRequest, HistoryItemOut, IngredientOut, PreferenceOut, PreferenceRequest, ProductAnalysisRequest, ProductOut,
     UserProfileOut, UserProfileRequest,
 )
 from app.services.analysis import AnalysisService
@@ -101,6 +101,20 @@ def analyze_product(product_id: str, request: ProductAnalysisRequest, db: Sessio
         user_id=request.user_id,
         save_to_history=request.save_to_history,
     ))
+
+
+@router.post("/products/{product_id}/reports", response_model=CatalogReportOut, status_code=status.HTTP_201_CREATED)
+def report_product(product_id: str, request: CatalogReportRequest, db: Session = Depends(get_db)) -> CatalogReportOut:
+    if not db.get(Product, product_id):
+        raise HTTPException(status_code=404, detail="Product not found")
+    report = CatalogReport(product_id=product_id, user_id=request.user_id, reason=request.reason, details=request.details)
+    db.add(report)
+    db.commit()
+    db.refresh(report)
+    return CatalogReportOut(
+        id=report.id, product_id=report.product_id, user_id=report.user_id, reason=report.reason,
+        details=report.details, status=report.status, created_at=report.created_at,
+    )
 
 
 @router.put("/users/{user_id}/preferences", response_model=PreferenceOut)

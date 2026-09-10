@@ -121,6 +121,21 @@ class Product(Base):
     is_demo: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
+class CatalogReport(Base):
+    """User-submitted data-quality report for a catalog record."""
+
+    __tablename__ = "catalog_reports"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    product_id: Mapped[str] = mapped_column(ForeignKey("products.id"), index=True)
+    user_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    reason: Mapped[str] = mapped_column(String(40))
+    details: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default="open", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    product: Mapped[Product] = relationship()
+
+
 class BrandSource(Base):
     """A registered brand source for future provider and official-site adapters."""
 

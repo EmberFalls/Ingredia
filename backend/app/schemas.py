@@ -108,6 +108,19 @@ class ProductAnalysisRequest(BaseModel):
     save_to_history: bool = True
 
 
+class CatalogReportRequest(BaseModel):
+    user_id: str | None = Field(default=None, max_length=100)
+    reason: str = Field(pattern="^(incorrect_ingredients|outdated_label|wrong_product|duplicate|other)$")
+    details: str | None = Field(default=None, max_length=2_000)
+
+
+class CatalogReportOut(CatalogReportRequest):
+    id: str
+    product_id: str
+    status: str
+    created_at: datetime | None
+
+
 class PreferenceRequest(BaseModel):
     ingredient_query: str = Field(min_length=1, max_length=160)
     preference_type: str = Field(default="avoid", pattern="^(allergen|sensitivity|avoid)$")

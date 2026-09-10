@@ -6,7 +6,10 @@ from app.services.product_discovery import ProductDiscoveryService
 
 def test_health_and_analysis() -> None:
     with TestClient(app) as client:
-        assert client.get("/api/v1/health").json() == {"status": "ok"}
+        health = client.get("/api/v1/health")
+        assert health.json() == {"status": "ok"}
+        assert health.headers["X-Request-ID"]
+        assert health.headers["X-Content-Type-Options"] == "nosniff"
         response = client.post("/api/v1/analyses/text", json={"ingredient_text": "Aqua, Parfum, Mystery X", "product_category": "personal_care"})
     assert response.status_code == 201
     body = response.json()
@@ -44,6 +47,17 @@ def test_catalog_product_detail_and_missing_product_response() -> None:
     assert detail.json()["ingredient_text"]
     assert detail.json()["source_name"]
     assert missing.status_code == 404
+
+
+def test_catalog_data_quality_report_is_saved() -> None:
+    with TestClient(app) as client:
+        product = client.get("/api/v1/products", params={"barcode": "000000000001"}).json()[0]
+        response = client.post(f"/api/v1/products/{product['id']}/reports", json={
+            "user_id": "catalog-review-test", "reason": "outdated_label", "details": "The package label has changed.",
+        })
+    assert response.status_code == 201
+    assert response.json()["product_id"] == product["id"]
+    assert response.json()["status"] == "open"
 
 
 def test_catalog_empty_barcode_and_external_unavailable_states(monkeypatch) -> None:
@@ -99,3 +113,16 @@ def test_profile_and_catalog_analysis_history_are_persisted() -> None:
     assert history.json()[0]["product_name"] == "Citrus Body Wash"
     assert history.json()[0]["product_brand"] == "Calmline"
     assert history.json()[0]["product_source_type"] == "demo"
+
+
+def test_major_food_allergen_alias_matches_without_inflating_general_score() -> None:
+    user_id = "food-allergen-test"
+    with TestClient(app) as client:
+        saved = client.put(f"/api/v1/users/{user_id}/preferences", json={"ingredient_query": "milk", "preference_type": "allergen"})
+        result = client.post("/api/v1/analyses/text", json={
+            "ingredient_text": "Water, Whey", "product_category": "food", "user_id": user_id,
+        }).json()
+    assert saved.status_code == 200
+    assert result["summary"]["personal_alerts"] == 1
+    assert result["summary"]["concern_score"] == 0
+    assert result["ingredients"][1]["canonical_name"] == "Milk"
