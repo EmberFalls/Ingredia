@@ -73,7 +73,12 @@ export default function Home() {
   }
   async function openHistory(item: HistoryItem) {
     setLoading(true); setError(null); setView('analyze');
-    try { const result = await requestAnalysis(item.raw_text, false); setDraft(item.raw_text); setCatalogProduct(null); setAnalysis(result); }
+    try {
+      const productResponse = item.product_id ? await fetch(`${API_BASE}/products/${item.product_id}`) : null;
+      const fetched = productResponse?.ok ? await productResponse.json() as CatalogProduct : null;
+      const product = fetched ?? (item.product_name ? { id: item.product_id ?? item.id, name: item.product_name, brand: item.product_brand ?? item.product_source_name ?? 'Unknown brand', category: item.product_category, barcode: null, ingredient_text: item.raw_text, image_url: item.product_image_url, description: null, source_type: item.product_source_type ?? 'saved_analysis', source_name: item.product_source_name ?? 'Saved analysis', source_url: null, source_confidence: 0, label_verified_at: null, source_retrieved_at: item.created_at, is_demo: false, ingredients_available: true } : null);
+      const result = await requestAnalysis(item.raw_text, false); setDraft(item.raw_text); setCatalogProduct(product); setAnalysis(result);
+    }
     catch { setError('We could not reopen that analysis.'); }
     finally { setLoading(false); }
   }

@@ -34,6 +34,17 @@ def test_catalog_searches_by_company_and_analyzes_product() -> None:
     assert analysis.json()["summary"]["parsed_ingredients"] > 0
 
 
+def test_catalog_product_detail_and_missing_product_response() -> None:
+    with TestClient(app) as client:
+        product = client.get("/api/v1/products", params={"query": "Calmline"}).json()[0]
+        detail = client.get(f"/api/v1/products/{product['id']}")
+        missing = client.get("/api/v1/products/does-not-exist")
+    assert detail.status_code == 200
+    assert detail.json()["ingredient_text"]
+    assert detail.json()["source_name"]
+    assert missing.status_code == 404
+
+
 def test_catalog_search_supports_barcode_category_and_source_metadata() -> None:
     with TestClient(app) as client:
         barcode = client.get("/api/v1/products", params={"barcode": "000000000004"})
