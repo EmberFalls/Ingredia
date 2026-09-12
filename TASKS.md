@@ -15,6 +15,13 @@
 - [x] Add editable profile photos, dietary context, cultural context, custom requirements, and personal matching.
 - [x] Complete catalog product/company/barcode search, image-backed stored products, provenance, analysis, and reporting.
 - [x] Verify the frontend production build and lint, plus backend unit/API coverage.
+- [x] Expose canonical alias traces with resolved, uncertain, and unknown states.
+- [x] Add source-backed chemical-family membership and a curated PFAS mapping dataset.
+- [x] Add explicit coverage counts, evidence-linked score contributions, and input provenance.
+- [x] Keep canonical personal-alert explanations strictly separate from the general score.
+- [x] Persist de-duplicated canonical ingredient encounters and expose 7/30-day insights.
+- [x] Explain product comparisons through deterministic contribution and coverage deltas.
+- [x] Integrate provenance, family, uncertainty, encounters, and comparison reasons into the existing UI.
 
 ## Intentionally outside this local scope
 

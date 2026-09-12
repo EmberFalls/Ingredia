@@ -18,10 +18,15 @@ class Ingredient(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     canonical_name: Mapped[str] = mapped_column(String(160), unique=True, index=True)
+    normalized_name: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    inci_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    cas_number: Mapped[str | None] = mapped_column(String(80), nullable=True)
     category: Mapped[str | None] = mapped_column(String(80), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     aliases: Mapped[list[IngredientAlias]] = relationship(back_populates="ingredient", cascade="all, delete-orphan")
     evidence_records: Mapped[list[EvidenceRecord]] = relationship(back_populates="ingredient", cascade="all, delete-orphan")
+    family_memberships: Mapped[list[IngredientFamilyMember]] = relationship(back_populates="ingredient", cascade="all, delete-orphan")
 
 
 class IngredientAlias(Base):
@@ -32,6 +37,9 @@ class IngredientAlias(Base):
     ingredient_id: Mapped[str] = mapped_column(ForeignKey("ingredients.id"), index=True)
     alias: Mapped[str] = mapped_column(String(160))
     normalized_alias: Mapped[str] = mapped_column(String(160), index=True)
+    alias_type: Mapped[str] = mapped_column(String(40), default="common_name")
+    source: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    confidence: Mapped[float] = mapped_column(Float, default=1.0)
     ingredient: Mapped[Ingredient] = relationship(back_populates="aliases")
 
 
@@ -45,11 +53,46 @@ class EvidenceRecord(Base):
     confidence: Mapped[float] = mapped_column(Float)
     source_name: Mapped[str] = mapped_column(String(160))
     source_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    source_type: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    evidence_quality: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    jurisdiction: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    exposure_route: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    restriction_condition: Mapped[str | None] = mapped_column(Text, nullable=True)
     summary: Mapped[str] = mapped_column(Text)
     applicability: Mapped[str] = mapped_column(String(80), default="general")
     limitations: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    retrieved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     ingredient: Mapped[Ingredient] = relationship(back_populates="evidence_records")
+
+
+class IngredientFamily(Base):
+    __tablename__ = "ingredient_families"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    name: Mapped[str] = mapped_column(String(160), unique=True)
+    slug: Mapped[str] = mapped_column(String(160), unique=True, index=True)
+    description: Mapped[str] = mapped_column(Text)
+    family_type: Mapped[str] = mapped_column(String(40))
+    source_name: Mapped[str] = mapped_column(String(160))
+    source_url: Mapped[str] = mapped_column(String(500))
+    members: Mapped[list[IngredientFamilyMember]] = relationship(back_populates="family", cascade="all, delete-orphan")
+
+
+class IngredientFamilyMember(Base):
+    __tablename__ = "ingredient_family_members"
+    __table_args__ = (UniqueConstraint("family_id", "ingredient_id", name="uq_family_ingredient"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    family_id: Mapped[str] = mapped_column(ForeignKey("ingredient_families.id"), index=True)
+    ingredient_id: Mapped[str] = mapped_column(ForeignKey("ingredients.id"), index=True)
+    relationship_type: Mapped[str] = mapped_column(String(40))
+    source_name: Mapped[str] = mapped_column(String(160))
+    source_url: Mapped[str] = mapped_column(String(500))
+    confidence: Mapped[float] = mapped_column(Float, default=1.0)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    family: Mapped[IngredientFamily] = relationship(back_populates="members")
+    ingredient: Mapped[Ingredient] = relationship(back_populates="family_memberships")
 
 
 class UserSensitivity(Base):
@@ -110,6 +153,21 @@ class ScanHistory(Base):
     concern_score: Mapped[int] = mapped_column(Integer)
     coverage: Mapped[float] = mapped_column(Float)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    encounters: Mapped[list[IngredientEncounter]] = relationship(back_populates="history", cascade="all, delete-orphan")
+
+
+class IngredientEncounter(Base):
+    __tablename__ = "ingredient_encounters"
+    __table_args__ = (UniqueConstraint("history_id", "ingredient_id", name="uq_history_ingredient_encounter"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    history_id: Mapped[str] = mapped_column(ForeignKey("scan_history.id"), index=True)
+    user_id: Mapped[str] = mapped_column(String(100), index=True)
+    product_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    ingredient_id: Mapped[str] = mapped_column(ForeignKey("ingredients.id"), index=True)
+    encountered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    history: Mapped[ScanHistory] = relationship(back_populates="encounters")
+    ingredient: Mapped[Ingredient] = relationship()
 
 
 class Product(Base):

@@ -1,0 +1,13 @@
+[
+  {
+    "canonical_ingredient": "Polytetrafluoroethylene",
+    "aliases": ["PTFE"],
+    "family": "PFAS-related",
+    "family_type": "chemical_family",
+    "relationship_type": "chemical_family",
+    "confidence": 1.0,
+    "source_name": "OECD",
+    "source_url": "https://www.oecd.org/content/dam/oecd/en/publications/reports/2018/05/summary-report-on-the-new-comprehensive-global-database-of-per-and-polyfluoroalkyl-substances-pfass_73d72705/1a14ad6c-en.pdf",
+    "notes": "The OECD PFAS database report includes PTFE among fluoropolymers. Membership does not infer exposure, dose, or harm from label presence."
+  }
+]

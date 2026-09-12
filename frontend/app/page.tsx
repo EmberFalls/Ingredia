@@ -2,7 +2,6 @@
 
 import {
   useEffect,
-  useMemo,
   useRef,
   useState,
 } from 'react';
@@ -73,10 +72,17 @@ function accountHeaders(json = false): Record<string, string> {
 }
 
 type Evidence = {
+  id: string;
   concern_type: string;
   confidence: number;
   source_name: string;
   source_url: string | null;
+  source_type: string | null;
+  evidence_quality: string | null;
+  jurisdiction: string | null;
+  exposure_route: string | null;
+  restriction_condition: string | null;
+  retrieved_at: string | null;
   summary: string;
   applicability: string;
   limitations: string | null;
@@ -85,10 +91,28 @@ type Ingredient = {
   position: number;
   raw_token: string;
   canonical_name: string | null;
-  match: { method: string; confidence: number } | null;
+  ingredient_id: string | null;
+  match: {
+    method: string;
+    confidence: number;
+    status: 'resolved' | 'uncertain' | 'unknown';
+    normalized_token: string;
+    matched_alias: string | null;
+  } | null;
   concern_score: number;
   evidence: Evidence[];
   personal_alert: { preference_type: string; message: string } | null;
+  families: {
+    name: string;
+    slug: string;
+    family_type: string;
+    relationship_type: string;
+    confidence: number;
+    source_name: string;
+    source_url: string;
+    notes: string | null;
+  }[];
+  product_contribution: number;
 };
 type Analysis = {
   analysis_id: string;
@@ -98,15 +122,35 @@ type Analysis = {
     coverage: number;
     parsed_ingredients: number;
     unknown_ingredients: number;
+    resolved_ingredients: number;
+    uncertain_ingredients: number;
     personal_alerts: number;
     high_confidence_flags: number;
   };
   ingredients: Ingredient[];
   unknowns: string[];
   score_breakdown: {
-    top_contributors: { ingredient: string; contribution: number }[];
+    top_contributors: {
+      ingredient_id: string;
+      ingredient: string;
+      ingredient_score: number;
+      contribution: number;
+      rank: number;
+      reasons: { claim_type: string; source_name: string; source_url: string; contribution: number }[];
+      evidence_record_ids: string[];
+    }[];
     scoring_version: string;
+    evidence_version: string;
   };
+  provenance: {
+    input_type: string;
+    label_source_type: string;
+    source_name: string;
+    source_url: string | null;
+    retrieved_at: string | null;
+    product_id?: string | null;
+  };
+  limitations: string[];
   disclaimer: string;
 };
 type Comparison = {
@@ -115,6 +159,24 @@ type Comparison = {
   shared_ingredients: string[];
   only_in_a: string[];
   only_in_b: string[];
+  score_delta: number;
+  coverage_delta: number;
+  personal_alert_difference: number;
+  unknown_difference: number;
+  uncertain_difference: number;
+  main_reasons: { type: string; ingredient: string; contribution_delta: number }[];
+};
+type EncounterInsights = {
+  window_days: number;
+  total_analyses: number;
+  ingredients: {
+    ingredient_id: string;
+    canonical_name: string;
+    product_encounters: number;
+    last_seen_at: string | null;
+    products: { id: string | null; name: string; brand: string | null; history_id: string }[];
+  }[];
+  disclaimer: string;
 };
 type CatalogProduct = {
   id: string;
@@ -282,16 +344,29 @@ export default function Home() {
     setView('analyze');
   }
 
-  async function requestAnalysis(text: string, save = true) {
+  async function requestAnalysis(
+    text: string,
+    save = true,
+    inputMethod: 'user_pasted' | 'ocr_confirmed' = 'user_pasted',
+    sourceProduct: CatalogProduct | null = null,
+  ) {
     const response = await fetch(`${API_BASE}/analyses/text`, {
       method: 'POST',
       headers: accountHeaders(true),
       body: JSON.stringify({
         ingredient_text: text,
-        product_name: 'Untitled product analysis',
-        product_category: 'personal_care',
+        product_id: sourceProduct?.id,
+        product_name: sourceProduct?.name ?? 'Untitled product analysis',
+        product_brand: sourceProduct?.brand,
+        product_category: sourceProduct?.category ?? 'personal_care',
+        product_image_url: sourceProduct?.image_url,
+        product_source_name: sourceProduct?.source_name,
+        product_source_type: sourceProduct?.source_type,
+        product_source_url: sourceProduct?.source_url,
+        product_source_retrieved_at: sourceProduct?.source_retrieved_at,
         user_id: userId,
         save_to_history: save,
+        input_method: sourceProduct ? 'catalog' : inputMethod,
       }),
     });
     if (!response.ok)
@@ -300,12 +375,15 @@ export default function Home() {
       );
     return response.json() as Promise<Analysis>;
   }
-  async function analyze(text = draft) {
+  async function analyze(
+    text = draft,
+    inputMethod: 'user_pasted' | 'ocr_confirmed' = 'user_pasted',
+  ) {
     setLoading(true);
     setError(null);
     setView('analyze');
     try {
-      const result = await requestAnalysis(text);
+      const result = await requestAnalysis(text, true, inputMethod);
       setDraft(text);
       setCatalogProduct(null);
       setAnalysis(result);
@@ -455,7 +533,12 @@ export default function Home() {
               ingredients_available: true,
             }
           : null);
-      const result = await requestAnalysis(item.raw_text, false);
+      const result = await requestAnalysis(
+        item.raw_text,
+        false,
+        'user_pasted',
+        product,
+      );
       setDraft(item.raw_text);
       setCatalogProduct(product);
       setAnalysis(result);
@@ -692,7 +775,7 @@ function Landing({
               <b>100</b> catalog products
             </span>
             <span>
-              <b>19</b> normalized ingredient records
+              <b>38</b> normalized ingredient records
             </span>
             <span>
               <b>9</b> major allergen groups
@@ -1400,7 +1483,10 @@ function AppShell({
   profile: UserProfile | null;
   loading: boolean;
   error: string | null;
-  onAnalyze: (text?: string) => Promise<void>;
+  onAnalyze: (
+    text?: string,
+    inputMethod?: 'user_pasted' | 'ocr_confirmed',
+  ) => Promise<void>;
   onAnalyzeProduct: (product: CatalogProduct) => Promise<void>;
   onSavePreference: (ingredient: string) => Promise<void>;
   onDeletePreference: (ingredientId: string) => Promise<void>;
@@ -1529,7 +1615,10 @@ function AnalyzePage({
   recent: Analysis[];
   loading: boolean;
   error: string | null;
-  onAnalyze: (text?: string) => Promise<void>;
+  onAnalyze: (
+    text?: string,
+    inputMethod?: 'user_pasted' | 'ocr_confirmed',
+  ) => Promise<void>;
   onOpenCatalog: () => void;
   onSelect: (ingredient: Ingredient) => void;
 }) {
@@ -1540,6 +1629,7 @@ function AnalyzePage({
   const [ocrLanguage, setOcrLanguage] = useState('eng');
   const [ocrRotation, setOcrRotation] = useState(0);
   const [ocrCrop, setOcrCrop] = useState(false);
+  const [ocrPrepared, setOcrPrepared] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
 
   async function extractLabel(file: File) {
@@ -1571,6 +1661,7 @@ function AnalyzePage({
       const extracted = extractIngredientSection(result.data.text);
       if (!extracted.text) throw new Error('No text found');
       setDraft(extracted.text);
+      setOcrPrepared(true);
       setMode('ingredients');
       setOcrMessage(
         describeOcrQuality(result.data.confidence, extracted.sectionFound),
@@ -1691,13 +1782,23 @@ function AnalyzePage({
           </div>
           <Textarea
             value={draft}
-            onChange={(event) => setDraft(event.target.value)}
+            onChange={(event) => {
+              setDraft(event.target.value);
+              setOcrPrepared(false);
+            }}
             aria-label="Ingredient analysis input"
             disabled={mode === 'product'}
           />
           <Button
             className="send-button"
-            onClick={() => (mode === 'product' ? onOpenCatalog() : onAnalyze())}
+            onClick={() =>
+              mode === 'product'
+                ? onOpenCatalog()
+                : onAnalyze(
+                    undefined,
+                    ocrPrepared ? 'ocr_confirmed' : 'user_pasted',
+                  )
+            }
             disabled={
               loading ||
               !!ocrMessage?.includes('…') ||
@@ -1802,7 +1903,7 @@ function AnalysisResult({
           </p>
         </div>
         <Badge variant="outline">
-          Database v{analysis.score_breakdown.scoring_version}
+          Score v{analysis.score_breakdown.scoring_version} · {analysis.score_breakdown.evidence_version}
         </Badge>
       </div>
       <div className="result-grid">
@@ -1829,10 +1930,12 @@ function AnalysisResult({
             <span style={{ width: `${coverage}%` }} />
           </div>
           <p>
-            {analysis.summary.parsed_ingredients -
-              analysis.summary.unknown_ingredients}{' '}
+            {analysis.summary.resolved_ingredients}{' '}
             / {analysis.summary.parsed_ingredients} ingredients matched
           </p>
+          {analysis.summary.uncertain_ingredients > 0 && (
+            <small>{analysis.summary.uncertain_ingredients} uncertain candidate — not scored</small>
+          )}
           {analysis.summary.unknown_ingredients > 0 && (
             <small>
               {analysis.summary.unknown_ingredients} unknown ingredient —
@@ -1877,7 +1980,17 @@ function AnalysisResult({
               {analysis.score_breakdown.top_contributors.map((item, index) => (
                 <li key={item.ingredient}>
                   <span>0{index + 1}</span>
-                  <b>{item.ingredient}</b>
+                  <button
+                    onClick={() => {
+                      const ingredient = analysis.ingredients.find(
+                        (row) => row.ingredient_id === item.ingredient_id,
+                      );
+                      if (ingredient) onSelect(ingredient);
+                    }}
+                  >
+                    <b>{item.ingredient}</b>
+                    <small>{item.reasons[0]?.source_name ?? 'Source-backed evidence'}</small>
+                  </button>
                   <em>+{item.contribution}</em>
                 </li>
               ))}
@@ -1930,11 +2043,21 @@ function AnalysisResult({
                   item.canonical_name !== item.raw_token && (
                     <small>{item.raw_token}</small>
                   )}
+                {item.match?.status === 'uncertain' && (
+                  <small>Possible match — confirmation required</small>
+                )}
+                {item.families.map((family) => (
+                  <Badge key={family.slug} variant="outline" className="family-badge">
+                    {family.name}
+                  </Badge>
+                ))}
               </span>
               <span
                 className={`assessment assessment--${item.canonical_name ? tone(item.concern_score) : 'unknown'}`}
               >
-                {item.canonical_name
+                {item.match?.status === 'uncertain'
+                  ? 'Uncertain'
+                  : item.canonical_name
                   ? item.concern_score
                     ? 'Review'
                     : 'No flag'
@@ -1955,6 +2078,23 @@ function AnalysisResult({
             </button>
           ))}
         </div>
+      </section>
+      <section className="provenance-panel">
+        <div>
+          <p className="eyebrow">Ingredient list source</p>
+          <h3>{analysis.provenance.source_name}</h3>
+          <p>
+            {analysis.provenance.label_source_type.replaceAll('_', ' ')}
+            {analysis.provenance.retrieved_at
+              ? ` · Retrieved ${new Date(analysis.provenance.retrieved_at).toLocaleDateString()}`
+              : ''}
+          </p>
+        </div>
+        {analysis.provenance.source_url && (
+          <a href={analysis.provenance.source_url} target="_blank" rel="noreferrer">
+            View source <ArrowRight size={14} />
+          </a>
+        )}
       </section>
       <p className="result-disclaimer">{analysis.disclaimer}</p>
     </section>
@@ -2097,9 +2237,36 @@ function ComparePage({
             ))}
           </div>
           <p className="comparison-note">
-            The score difference reflects currently configured evidence records
-            and is not a measure of personal safety.
+            {result.score_delta === 0
+              ? 'Both products have the same evidence-backed concern score in the current evidence set.'
+              : `${result.score_delta > 0 ? 'Product B' : 'Product A'} has a lower evidence-backed concern score in the current evidence set.`}{' '}
+            This is not a measure of personal safety.
           </p>
+          <section className="comparison-reasons">
+            <p className="eyebrow">Why the results differ</p>
+            <h3>Deterministic contribution changes</h3>
+            {result.main_reasons.length ? (
+              <ol>
+                {result.main_reasons.map((reason) => (
+                  <li key={`${reason.type}-${reason.ingredient}`}>
+                    <b>{reason.ingredient}</b>
+                    <span>
+                      {reason.contribution_delta > 0 ? 'Product A' : 'Product B'} contributes{' '}
+                      {Math.abs(reason.contribution_delta)} more points
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            ) : (
+              <p className="muted-copy">No score-contribution difference was found.</p>
+            )}
+            <div className="comparison-metrics">
+              <span>Coverage delta {Math.round(Math.abs(result.coverage_delta) * 100)}%</span>
+              <span>Unknown delta {Math.abs(result.unknown_difference)}</span>
+              <span>Uncertain delta {Math.abs(result.uncertain_difference)}</span>
+              <span>Personal-alert delta {Math.abs(result.personal_alert_difference)}</span>
+            </div>
+          </section>
           <div className="difference-columns">
             <Difference
               title="Only in product A"
@@ -2169,22 +2336,26 @@ function HistoryPage({
 }) {
   const [tab, setTab] = useState<'products' | 'ingredients'>('products');
   const [items, setItems] = useState<HistoryItem[]>([]);
+  const [insights, setInsights] = useState<EncounterInsights | null>(null);
+  const [insightDays, setInsightDays] = useState<7 | 30>(7);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<HistoryItem | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
   const [deleting, setDeleting] = useState(false);
   useEffect(() => {
-    void fetch(`${API_BASE}/users/${userId}/history`, {
-      headers: accountHeaders(),
-    })
-      .then(async (response) => {
-        if (!response.ok) throw new Error();
-        setItems((await response.json()) as HistoryItem[]);
+    void Promise.all([
+      fetch(`${API_BASE}/users/${userId}/history`, { headers: accountHeaders() }),
+      fetch(`${API_BASE}/users/${userId}/insights/ingredients?days=${insightDays}`, { headers: accountHeaders() }),
+    ])
+      .then(async ([historyResponse, insightsResponse]) => {
+        if (!historyResponse.ok || !insightsResponse.ok) throw new Error();
+        setItems((await historyResponse.json()) as HistoryItem[]);
+        setInsights((await insightsResponse.json()) as EncounterInsights);
       })
       .catch(() => setError('Your saved history is unavailable right now.'))
       .finally(() => setLoading(false));
-  }, [userId]);
+  }, [userId, insightDays]);
   async function deleteItem() {
     if (!pendingDelete) return;
     setDeleting(true);
@@ -2214,6 +2385,7 @@ function HistoryPage({
       });
       if (!response.ok) throw new Error();
       setItems([]);
+      setInsights(null);
       setConfirmClear(false);
       setError(null);
     } catch {
@@ -2222,19 +2394,6 @@ function HistoryPage({
       setDeleting(false);
     }
   }
-  const ingredients = useMemo(() => {
-    const values = new Map<string, number>();
-    items.forEach((item) =>
-      item.raw_text
-        .split(/[,;\n]/)
-        .map((value) => value.trim())
-        .filter(Boolean)
-        .forEach((ingredient) =>
-          values.set(ingredient, (values.get(ingredient) ?? 0) + 1),
-        ),
-    );
-    return [...values.entries()].sort((a, b) => b[1] - a[1]);
-  }, [items]);
   return (
     <section className="secondary-page history-page">
       <p className="eyebrow">Your history</p>
@@ -2334,18 +2493,31 @@ function HistoryPage({
             text="Analyze a product to build your saved history."
           />
         )
-      ) : ingredients.length ? (
-        <div className="history-ingredients">
-          {ingredients.map(([ingredient, count], index) => (
-            <article key={ingredient}>
+      ) : insights?.ingredients.length ? (
+        <div className="encounter-insights">
+          <div className="insight-controls">
+            <div>
+              <p className="eyebrow">Repeated ingredient encounters</p>
+              <h3>{insights.total_analyses} analyses in this window</h3>
+            </div>
+            <div className="history-tabs compact">
+              <button className={insightDays === 7 ? 'active' : ''} onClick={() => setInsightDays(7)}>7 days</button>
+              <button className={insightDays === 30 ? 'active' : ''} onClick={() => setInsightDays(30)}>30 days</button>
+            </div>
+          </div>
+          <p className="encounter-disclaimer">{insights.disclaimer}</p>
+          <div className="history-ingredients">
+          {insights.ingredients.map((ingredient, index) => (
+            <article key={ingredient.ingredient_id}>
               <span>{String(index + 1).padStart(2, '0')}</span>
-              <b>{ingredient}</b>
+              <b>{ingredient.canonical_name}</b>
               <p>
-                Appeared in {count} saved analysis{count === 1 ? '' : 'es'}
+                Appeared in {ingredient.product_encounters} of {insights.total_analyses} analyzed products
               </p>
-              <ChevronRight size={17} />
+              <small>{ingredient.products.slice(0, 3).map((product) => product.name).join(' · ')}</small>
             </article>
           ))}
+          </div>
         </div>
       ) : (
         <Empty
@@ -3044,7 +3216,29 @@ function IngredientDrawer({
                 </SheetDescription>
               </SheetHeader>
               <div className="drawer-body">
-                {ingredient.canonical_name && (
+                <section className="resolution-card">
+                  <p className="eyebrow">Resolution trace</p>
+                  <dl>
+                    <div><dt>Raw label</dt><dd>{ingredient.raw_token}</dd></div>
+                    <div><dt>Canonical</dt><dd>{ingredient.canonical_name ?? 'No confident match'}</dd></div>
+                    <div><dt>Status</dt><dd>{ingredient.match?.status ?? 'unknown'}</dd></div>
+                    <div><dt>Method</dt><dd>{ingredient.match?.method.replaceAll('_', ' ') ?? 'unresolved'}</dd></div>
+                    <div><dt>Confidence</dt><dd>{Math.round((ingredient.match?.confidence ?? 0) * 100)}%</dd></div>
+                    <div><dt>Score contribution</dt><dd>+{ingredient.product_contribution}</dd></div>
+                  </dl>
+                </section>
+                {ingredient.families.map((family) => (
+                  <section className="family-detail" key={family.slug}>
+                    <Badge variant="outline" className="family-badge">{family.name}</Badge>
+                    <h3>Verified {family.relationship_type.replaceAll('_', ' ')}</h3>
+                    <p>{family.notes}</p>
+                    <small>This membership is informational and does not by itself add concern points.</small>
+                    <a href={family.source_url} target="_blank" rel="noreferrer">
+                      {family.source_name} membership source <ArrowRight size={14} />
+                    </a>
+                  </section>
+                ))}
+                {ingredient.canonical_name && ingredient.match?.status === 'resolved' && (
                   <Button
                     variant="outline"
                     className="preference-button"
@@ -3100,7 +3294,17 @@ function IngredientDrawer({
                               <dt>Context</dt>
                               <dd>{record.applicability.replace('_', ' ')}</dd>
                             </div>
+                            {record.evidence_quality && (
+                              <div><dt>Evidence quality</dt><dd>{record.evidence_quality.replaceAll('_', ' ')}</dd></div>
+                            )}
+                            {record.jurisdiction && (
+                              <div><dt>Jurisdiction</dt><dd>{record.jurisdiction}</dd></div>
+                            )}
                           </dl>
+                          {record.restriction_condition && <p>{record.restriction_condition}</p>}
+                          {record.retrieved_at && (
+                            <small>Evidence retrieved {new Date(record.retrieved_at).toLocaleDateString()}</small>
+                          )}
                           {record.limitations && (
                             <small>
                               <b>Limitations:</b> {record.limitations}
@@ -3123,12 +3327,16 @@ function IngredientDrawer({
                   <Empty
                     icon={<Search />}
                     title={
-                      ingredient.canonical_name
+                      ingredient.match?.status === 'uncertain'
+                        ? 'Candidate needs confirmation'
+                        : ingredient.canonical_name
                         ? 'No evidence records yet'
                         : 'Unknown does not mean harmful'
                     }
                     text={
-                      ingredient.canonical_name
+                      ingredient.match?.status === 'uncertain'
+                        ? `This may refer to ${ingredient.canonical_name}, but the match was not used for scoring, family detection, or personal matching.`
+                        : ingredient.canonical_name
                         ? 'This ingredient is recognized, but the local evidence set has no active records for it.'
                         : 'It did not match the current database with enough confidence and has not increased the score.'
                     }

@@ -2,6 +2,8 @@
 
 Complete local-first web product for transparent ingredient-list analysis. It parses pasted or OCR-extracted labels, resolves aliases and nested constituents, returns source-linked evidence, creates a deterministic evidence-concern score, and keeps personal alerts separate from that general score.
 
+Ingredia now exposes its full auditable novelty chain: raw label terms resolve to canonical identities with resolved/uncertain/unknown states; verified family memberships remain source-backed; analysis coverage and evidence-linked score contributions are explicit; catalogue, pasted, and OCR inputs retain provenance; personal matches remain parallel to the general score; saved analyses produce repeated-ingredient encounter insights; and comparisons explain their score differences deterministically.
+
 The included frontend is configured to run locally at `http://localhost:3000` and connect to this API.
 
 ## Frontend
@@ -51,6 +53,7 @@ python -m pytest
 - `DELETE /api/v1/users/{user_id}/preferences/{ingredient_id}`
 - `GET|PUT /api/v1/users/{user_id}/profile`
 - `GET /api/v1/users/{user_id}/history`
+- `GET /api/v1/users/{user_id}/insights/ingredients?days=7|30`
 - `DELETE /api/v1/users/{user_id}/history/{history_id}`
 - `DELETE /api/v1/users/{user_id}/history`
 - `POST /api/v1/comparisons`
@@ -66,3 +69,5 @@ OCR runs in the browser with Tesseract.js. The selected language data may be fet
 This repository is intentionally complete for local use, not deployment or multi-instance scale. It uses SQLite, local email/password accounts, and a browser-stored session token. Google sign-in is intentionally not shown because OAuth cannot be made real without a registered Google client and redirect credentials.
 
 The score is an evidence-backed concern indicator, not a diagnosis, an exposure measurement, or a prediction of harm. Unknown ingredients are displayed neutrally, and personal profile matches never alter the general score. The curated evidence set is intentionally conservative and should not replace checking packaging or professional medical advice.
+
+Verified chemical-family membership is stored as curated data with a source and confidence. The included PFAS demonstration maps only PTFE using an OECD reference; Ingredia never infers PFAS membership from spelling, and family membership alone does not add score points. Encounter counts mean appearances in analyzed products—not concentration, absorbed dose, toxic load, or biological exposure.

@@ -15,6 +15,9 @@ class NormalizedIngredient:
     ingredient: Ingredient | None
     method: str
     confidence: float
+    status: str
+    normalized_token: str
+    matched_alias: str | None = None
 
 
 def normalize_key(value: str) -> str:
@@ -22,11 +25,13 @@ def normalize_key(value: str) -> str:
 
 
 class IngredientNormalizer:
-    def __init__(self, db: Session, fuzzy_threshold: float = 0.88) -> None:
+    def __init__(self, db: Session, fuzzy_threshold: float = 0.88, uncertain_threshold: float = 0.72) -> None:
         self.db = db
         self.fuzzy_threshold = fuzzy_threshold
+        self.uncertain_threshold = uncertain_threshold
 
     def normalize(self, raw_token: str) -> NormalizedIngredient:
+        normalized_token = normalize_key(raw_token)
         candidates = self._candidate_forms(raw_token)
         aliases = self.db.scalars(select(IngredientAlias).join(IngredientAlias.ingredient)).all()
         by_key = {alias.normalized_alias: alias for alias in aliases}
@@ -34,7 +39,7 @@ class IngredientNormalizer:
             alias = by_key.get(normalize_key(candidate))
             if alias:
                 method = "exact_canonical" if normalize_key(alias.alias) == normalize_key(alias.ingredient.canonical_name) else "exact_alias"
-                return NormalizedIngredient(alias.ingredient, method, 1.0)
+                return NormalizedIngredient(alias.ingredient, method, 1.0, "resolved", normalized_token, alias.alias)
         best_alias: IngredientAlias | None = None
         best_score = 0.0
         for candidate in candidates:
@@ -44,8 +49,10 @@ class IngredientNormalizer:
                 if score > best_score:
                     best_alias, best_score = alias, score
         if best_alias and best_score >= self.fuzzy_threshold:
-            return NormalizedIngredient(best_alias.ingredient, "fuzzy_alias", round(best_score, 3))
-        return NormalizedIngredient(None, "unknown", 0.0)
+            return NormalizedIngredient(best_alias.ingredient, "fuzzy_alias", round(best_score, 3), "resolved", normalized_token, best_alias.alias)
+        if best_alias and best_score >= self.uncertain_threshold:
+            return NormalizedIngredient(best_alias.ingredient, "fuzzy_candidate", round(best_score, 3), "uncertain", normalized_token, best_alias.alias)
+        return NormalizedIngredient(None, "unresolved", 0.0, "unknown", normalized_token)
 
     @staticmethod
     def _candidate_forms(raw_token: str) -> list[str]:

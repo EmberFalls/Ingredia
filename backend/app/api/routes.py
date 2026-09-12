@@ -8,11 +8,11 @@ from sqlalchemy import delete, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.db.database import get_db
-from app.db.models import BrandSource, CatalogReport, Ingredient, IngredientAlias, Product, ScanHistory, UserAccount, UserProfile, UserSensitivity
+from app.db.models import BrandSource, CatalogReport, Ingredient, IngredientAlias, IngredientEncounter, Product, ScanHistory, UserAccount, UserProfile, UserSensitivity
 from app.schemas import (
     AccountOut, AnalyzeTextRequest, AnalyzeTextResponse, AuthOut, CompareRequest, CompareResponse, LoginRequest, RegisterRequest,
     BrandSourceOut, CatalogReportOut, CatalogReportRequest, HistoryItemOut, IngredientOut, PreferenceOut, PreferenceRequest, ProductAnalysisRequest, ProductOut,
-    UserProfileOut, UserProfileRequest,
+    EncounterInsightsOut, EncounterProductOut, IngredientEncounterOut, UserProfileOut, UserProfileRequest,
 )
 from app.services.analysis import AnalysisService
 from app.services.auth import account_display_name, account_for_token, create_session, hash_password, normalize_email, revoke_session, verify_password
@@ -212,6 +212,9 @@ def analyze_product(product_id: str, payload: ProductAnalysisRequest, request: R
         product_image_url=product.image_url,
         product_source_name=product.source_name,
         product_source_type=product.source_type,
+        product_source_url=product.source_url,
+        product_source_retrieved_at=product.source_retrieved_at,
+        input_method="catalog",
         user_id=payload.user_id,
         save_to_history=payload.save_to_history,
     ))
@@ -325,12 +328,52 @@ def get_history(user_id: str, request: Request, limit: int = 30, db: Session = D
     return [_history_out(row) for row in rows]
 
 
+@router.get("/users/{user_id}/insights/ingredients", response_model=EncounterInsightsOut)
+def ingredient_encounters(user_id: str, request: Request, days: int = 7, db: Session = Depends(get_db)) -> EncounterInsightsOut:
+    from datetime import datetime, timedelta, timezone
+
+    _authorize_account_data(request, db, user_id)
+    window_days = 30 if days == 30 else 7
+    since = datetime.now(timezone.utc) - timedelta(days=window_days)
+    history_rows = db.scalars(select(ScanHistory).where(ScanHistory.user_id == user_id, ScanHistory.created_at >= since)).all()
+    history_ids = {row.id for row in history_rows}
+    if not history_ids:
+        return EncounterInsightsOut(window_days=window_days, total_analyses=0, ingredients=[], disclaimer=_encounter_disclaimer())
+    rows = db.execute(
+        select(IngredientEncounter, Ingredient, ScanHistory)
+        .join(Ingredient, IngredientEncounter.ingredient_id == Ingredient.id)
+        .join(ScanHistory, IngredientEncounter.history_id == ScanHistory.id)
+        .where(IngredientEncounter.history_id.in_(history_ids))
+        .order_by(IngredientEncounter.encountered_at.desc())
+    ).all()
+    grouped: dict[str, dict[str, object]] = {}
+    for encounter, ingredient, history in rows:
+        item = grouped.setdefault(ingredient.id, {"ingredient": ingredient, "rows": []})
+        item["rows"].append((encounter, history))
+    output = []
+    for ingredient_id, item in grouped.items():
+        ingredient = item["ingredient"]
+        encounter_rows = item["rows"]
+        products = [EncounterProductOut(
+            id=history.product_id, name=history.product_name or "Ingredient list analysis",
+            brand=history.product_brand, history_id=history.id,
+        ) for _, history in encounter_rows]
+        output.append(IngredientEncounterOut(
+            ingredient_id=ingredient_id, canonical_name=ingredient.canonical_name,
+            product_encounters=len(encounter_rows), last_seen_at=encounter_rows[0][0].encountered_at,
+            products=products,
+        ))
+    output.sort(key=lambda item: (-item.product_encounters, item.canonical_name))
+    return EncounterInsightsOut(window_days=window_days, total_analyses=len(history_rows), ingredients=output, disclaimer=_encounter_disclaimer())
+
+
 @router.delete("/users/{user_id}/history/{history_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_history_item(user_id: str, history_id: str, request: Request, db: Session = Depends(get_db)) -> Response:
     _authorize_account_data(request, db, user_id)
     item = db.scalar(select(ScanHistory).where(ScanHistory.id == history_id, ScanHistory.user_id == user_id))
     if not item:
         raise HTTPException(status_code=404, detail="History item not found")
+    db.execute(delete(IngredientEncounter).where(IngredientEncounter.history_id == item.id))
     db.delete(item)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -339,6 +382,8 @@ def delete_history_item(user_id: str, history_id: str, request: Request, db: Ses
 @router.delete("/users/{user_id}/history", status_code=status.HTTP_204_NO_CONTENT)
 def clear_history(user_id: str, request: Request, db: Session = Depends(get_db)) -> Response:
     _authorize_account_data(request, db, user_id)
+    history_ids = select(ScanHistory.id).where(ScanHistory.user_id == user_id)
+    db.execute(delete(IngredientEncounter).where(IngredientEncounter.history_id.in_(history_ids)))
     db.execute(delete(ScanHistory).where(ScanHistory.user_id == user_id))
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -351,9 +396,29 @@ def compare(payload: CompareRequest, request: Request, db: Session = Depends(get
     service = AnalysisService(db)
     analysis_a = service.analyze(payload.product_a)
     analysis_b = service.analyze(payload.product_b)
-    a = {item.canonical_name for item in analysis_a.ingredients if item.canonical_name}
-    b = {item.canonical_name for item in analysis_b.ingredients if item.canonical_name}
-    return CompareResponse(product_a=analysis_a, product_b=analysis_b, shared_ingredients=sorted(a & b), only_in_a=sorted(a - b), only_in_b=sorted(b - a))
+    a = {item.canonical_name for item in analysis_a.ingredients if item.canonical_name and item.match and item.match.status == "resolved"}
+    b = {item.canonical_name for item in analysis_b.ingredients if item.canonical_name and item.match and item.match.status == "resolved"}
+    contributions_a = {item.canonical_name: item.product_contribution for item in analysis_a.ingredients if item.canonical_name and item.match and item.match.status == "resolved"}
+    contributions_b = {item.canonical_name: item.product_contribution for item in analysis_b.ingredients if item.canonical_name and item.match and item.match.status == "resolved"}
+    reasons = []
+    for name in sorted(a | b):
+        delta = round(contributions_a.get(name, 0) - contributions_b.get(name, 0), 2)
+        if delta:
+            reasons.append({
+                "type": "ingredient_only_in_a" if name in a - b else "ingredient_only_in_b" if name in b - a else "evidence_contribution_difference",
+                "ingredient": name, "contribution_delta": delta,
+            })
+    reasons.sort(key=lambda item: abs(float(item["contribution_delta"])), reverse=True)
+    return CompareResponse(
+        product_a=analysis_a, product_b=analysis_b, shared_ingredients=sorted(a & b),
+        only_in_a=sorted(a - b), only_in_b=sorted(b - a),
+        score_delta=analysis_a.summary.concern_score - analysis_b.summary.concern_score,
+        coverage_delta=round(analysis_a.summary.coverage - analysis_b.summary.coverage, 3),
+        personal_alert_difference=analysis_a.summary.personal_alerts - analysis_b.summary.personal_alerts,
+        unknown_difference=analysis_a.summary.unknown_ingredients - analysis_b.summary.unknown_ingredients,
+        uncertain_difference=analysis_a.summary.uncertain_ingredients - analysis_b.summary.uncertain_ingredients,
+        main_reasons=reasons[:5],
+    )
 
 
 def _ingredient_out(item: Ingredient) -> IngredientOut:
@@ -361,10 +426,22 @@ def _ingredient_out(item: Ingredient) -> IngredientOut:
         id=item.id, canonical_name=item.canonical_name, category=item.category, description=item.description,
         aliases=[alias.alias for alias in item.aliases],
         evidence=[{
+            "id": record.id,
             "concern_type": record.concern_type, "severity": record.severity, "confidence": record.confidence,
             "source_name": record.source_name, "source_url": record.source_url, "summary": record.summary,
             "applicability": record.applicability, "limitations": record.limitations,
-        } for record in item.evidence_records if record.is_active],
+            "source_type": record.source_type, "evidence_quality": record.evidence_quality,
+            "jurisdiction": record.jurisdiction, "exposure_route": record.exposure_route,
+            "restriction_condition": record.restriction_condition,
+            "retrieved_at": record.retrieved_at,
+        } for record in item.evidence_records if record.is_active and record.source_url],
+        families=[{
+            "name": membership.family.name, "slug": membership.family.slug,
+            "family_type": membership.family.family_type,
+            "relationship_type": membership.relationship_type,
+            "confidence": membership.confidence, "source_name": membership.source_name,
+            "source_url": membership.source_url, "notes": membership.notes,
+        } for membership in item.family_memberships],
     )
 
 
@@ -430,3 +507,7 @@ def _json_list(value: str) -> list[str]:
         return decoded if isinstance(decoded, list) and all(isinstance(item, str) for item in decoded) else []
     except (TypeError, json.JSONDecodeError):
         return []
+
+
+def _encounter_disclaimer() -> str:
+    return "These counts represent appearances in products you analyzed. They do not represent absorbed dose or biological exposure."

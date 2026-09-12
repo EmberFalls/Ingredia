@@ -6,7 +6,7 @@ from urllib.parse import quote
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import BrandSource, EvidenceRecord, Ingredient, IngredientAlias, Product
+from app.db.models import BrandSource, EvidenceRecord, Ingredient, IngredientAlias, IngredientFamily, IngredientFamilyMember, Product
 from app.services.normalizer import normalize_key
 
 
@@ -14,9 +14,9 @@ SEED_INGREDIENTS = [
     {"name": "Water", "category": "solvent", "description": "Common cosmetic solvent.", "aliases": ["Water", "Aqua", "Aqua (Water)"], "evidence": []},
     {"name": "Glycerin", "category": "humectant", "description": "Common moisture-binding ingredient.", "aliases": ["Glycerin", "Glycerol"], "evidence": []},
     {"name": "Niacinamide", "category": "skin conditioning", "description": "A form of vitamin B3 used in cosmetic formulations.", "aliases": ["Niacinamide", "Nicotinamide"], "evidence": []},
-    {"name": "Fragrance", "category": "fragrance", "description": "A fragrance mixture or fragrance-designating label term.", "aliases": ["Fragrance", "Parfum", "Fragrance (Parfum)", "Perfume"], "evidence": [{"concern_type": "sensitization", "severity": 3, "confidence": 0.85, "source_name": "Demo curated evidence", "summary": "Fragrance mixtures can be relevant for people with fragrance sensitivities.", "applicability": "personal_care", "limitations": "Individual ingredients and formulation concentrations are not disclosed by this umbrella label."}]},
-    {"name": "Phenoxyethanol", "category": "preservative", "description": "Common cosmetic preservative.", "aliases": ["Phenoxyethanol", "Phenoxethanol"], "evidence": [{"concern_type": "restriction", "severity": 2, "confidence": 0.8, "source_name": "Demo curated evidence", "summary": "Use may be subject to concentration limits depending on jurisdiction and product type.", "applicability": "personal_care", "limitations": "Presence in an ingredient list does not reveal concentration."}]},
-    {"name": "Limonene", "category": "fragrance", "description": "Fragrance ingredient found in citrus oils and fragrance compositions.", "aliases": ["Limonene", "d-Limonene"], "evidence": [{"concern_type": "sensitization", "severity": 3, "confidence": 0.82, "source_name": "Demo curated evidence", "summary": "May be relevant for sensitization concerns, especially after oxidation.", "applicability": "personal_care", "limitations": "Risk depends on formulation, oxidation state, and individual sensitivity."}]},
+    {"name": "Fragrance", "category": "fragrance", "description": "A fragrance mixture or fragrance-designating label term.", "aliases": ["Fragrance", "Parfum", "Fragrance (Parfum)", "Perfume"], "evidence": [{"concern_type": "sensitization_context", "severity": 2, "confidence": 0.8, "source_name": "European Chemicals Agency", "source_url": "https://echa.europa.eu/en/hot-topics/skin-sensitising-chemicals", "source_type": "regulatory_authority", "evidence_quality": "regulatory_context", "jurisdiction": "European Union", "exposure_route": "dermal", "summary": "Fragrance-designating terms may conceal individual fragrance substances that are relevant to sensitized users.", "applicability": "personal_care", "limitations": "The umbrella label does not identify the individual fragrance substances or their concentrations."}]},
+    {"name": "Phenoxyethanol", "category": "preservative", "description": "Common cosmetic preservative.", "aliases": ["Phenoxyethanol", "Phenoxethanol"], "evidence": [{"concern_type": "regulated_concentration", "severity": 2, "confidence": 0.98, "source_name": "European Commission Scientific Committee on Consumer Safety", "source_url": "https://health.ec.europa.eu/publications/phenoxyethanol_en", "source_type": "expert_regulatory_opinion", "evidence_quality": "high", "jurisdiction": "European Union", "exposure_route": "cosmetic_use", "restriction_condition": "Authorized as a preservative up to 1.0% in ready-for-use cosmetic preparations.", "summary": "The SCCS concluded that phenoxyethanol is safe as a cosmetic preservative at a maximum concentration of 1.0%.", "applicability": "personal_care", "limitations": "Ingredient-list presence does not reveal concentration, so compliance or risk cannot be inferred from presence alone."}]},
+    {"name": "Limonene", "category": "fragrance", "description": "Fragrance ingredient found in citrus oils and fragrance compositions.", "aliases": ["Limonene", "d-Limonene"], "evidence": [{"concern_type": "sensitization", "severity": 3, "confidence": 0.95, "source_name": "European Chemicals Agency", "source_url": "https://echa.europa.eu/substance-information/-/substanceinfo/100.025.284", "source_type": "regulatory_substance_database", "evidence_quality": "high", "jurisdiction": "European Union", "exposure_route": "dermal", "summary": "D-limonene is listed in European regulatory substance information and cosmetic restriction context relevant to fragrance sensitization.", "applicability": "personal_care", "limitations": "Product relevance depends on concentration, formulation, oxidation state, route, and individual sensitivity."}]},
     {"name": "Sodium Benzoate", "category": "preservative", "description": "Common preservative used in food and personal care.", "aliases": ["Sodium Benzoate", "E211", "INS 211"], "evidence": []},
     {"name": "Lecithin", "category": "emulsifier", "description": "Emulsifier commonly used in food and cosmetics.", "aliases": ["Lecithin", "INS 322", "E322"], "evidence": []},
     {"name": "Tartrazine", "category": "colorant", "description": "Synthetic yellow colorant.", "aliases": ["Tartrazine", "CI 19140", "E102", "INS 102"], "evidence": [{"concern_type": "labeling", "severity": 2, "confidence": 0.75, "source_name": "Demo curated evidence", "summary": "Colorant use and labeling can vary by product category and jurisdiction.", "applicability": "all", "limitations": "This record is informational and is not a statement of individual risk."}]},
@@ -45,6 +45,29 @@ SEED_INGREDIENTS = [
     {"name": "Garlic", "category": "food ingredient", "description": "A culinary allium.", "aliases": ["Garlic"], "evidence": []},
     {"name": "Taurine", "category": "food ingredient", "description": "An amino sulfonic acid used in some beverages.", "aliases": ["Taurine"], "evidence": []},
     {"name": "Vanillin", "category": "flavouring", "description": "A vanilla-associated flavouring compound.", "aliases": ["Vanillin", "Vanilla Extract", "Natural Vanilla Extract"], "evidence": []},
+    {"name": "Polytetrafluoroethylene", "category": "film former", "description": "A fluoropolymer also known as PTFE.", "aliases": ["Polytetrafluoroethylene", "PTFE"], "evidence": []},
+    {"name": "Gelatin", "category": "animal-derived ingredient", "description": "A protein ingredient derived from collagen.", "aliases": ["Gelatin", "Gelatine"], "evidence": []},
+    {"name": "Cooking Wine", "category": "alcohol-related ingredient", "description": "Wine used as a cooking ingredient.", "aliases": ["Cooking Wine", "Wine"], "evidence": []},
+    {"name": "Mustard", "category": "food ingredient", "description": "Mustard seed or mustard-derived food ingredient.", "aliases": ["Mustard", "Mustard Seed"], "evidence": []},
+]
+
+PFAS_MEMBERSHIPS = json.loads(
+    (Path(__file__).resolve().parents[3] / "data" / "seed" / "pfas_memberships.json").read_text(encoding="utf-8")
+)
+
+SEED_FAMILIES = [
+    {
+        "name": "PFAS-related", "slug": "pfas-related",
+        "description": "A curated membership based on the OECD PFAS terminology and substance grouping; membership is not itself a product-level risk conclusion.",
+        "family_type": "chemical_family", "source_name": "OECD",
+        "source_url": "https://www.oecd.org/en/publications/reconciling-terminology-of-the-universe-of-per-and-polyfluoroalkyl-substances_e458e796-en.html",
+        "members": [{
+            "ingredient": mapping["canonical_ingredient"],
+            "relationship_type": mapping["relationship_type"],
+            "confidence": mapping["confidence"], "source_name": mapping["source_name"],
+            "source_url": mapping["source_url"], "notes": mapping["notes"],
+        } for mapping in PFAS_MEMBERSHIPS],
+    },
 ]
 
 # These are clearly-labelled fictional catalog records. They make the local
@@ -306,17 +329,50 @@ def seed_database(db: Session) -> None:
     for item in SEED_INGREDIENTS:
         ingredient = db.scalar(select(Ingredient).where(Ingredient.canonical_name == item["name"]))
         if not ingredient:
-            ingredient = Ingredient(canonical_name=item["name"], category=item["category"], description=item["description"])
-            ingredient.evidence_records = [EvidenceRecord(**record) for record in item["evidence"]]
+            ingredient = Ingredient(canonical_name=item["name"], normalized_name=normalize_key(item["name"]), category=item["category"], description=item["description"])
             db.add(ingredient)
             db.flush()
+        else:
+            ingredient.normalized_name = normalize_key(item["name"])
+            ingredient.is_active = True
+        for record_data in item["evidence"]:
+            record = next((row for row in ingredient.evidence_records if row.concern_type == record_data["concern_type"]), None)
+            if not record:
+                ingredient.evidence_records.append(EvidenceRecord(**record_data))
+            else:
+                for field, value in record_data.items():
+                    setattr(record, field, value)
         existing_aliases = {alias.normalized_alias for alias in ingredient.aliases}
         for alias in item["aliases"]:
             normalized = normalize_key(alias)
             if normalized not in existing_aliases:
-                ingredient.aliases.append(IngredientAlias(alias=alias, normalized_alias=normalized))
+                ingredient.aliases.append(IngredientAlias(alias=alias, normalized_alias=normalized, alias_type="common_name", source="Curated Ingredia seed"))
                 existing_aliases.add(normalized)
     db.flush()
+    for family_data in SEED_FAMILIES:
+        family = db.scalar(select(IngredientFamily).where(IngredientFamily.slug == family_data["slug"]))
+        family_fields = {key: value for key, value in family_data.items() if key != "members"}
+        if not family:
+            family = IngredientFamily(**family_fields)
+            db.add(family)
+            db.flush()
+        else:
+            for field, value in family_fields.items():
+                setattr(family, field, value)
+        for member_data in family_data["members"]:
+            ingredient = db.scalar(select(Ingredient).where(Ingredient.canonical_name == member_data["ingredient"]))
+            if not ingredient:
+                continue
+            membership = db.scalar(select(IngredientFamilyMember).where(
+                IngredientFamilyMember.family_id == family.id,
+                IngredientFamilyMember.ingredient_id == ingredient.id,
+            ))
+            values = {key: value for key, value in member_data.items() if key != "ingredient"}
+            if not membership:
+                db.add(IngredientFamilyMember(family_id=family.id, ingredient_id=ingredient.id, **values))
+            else:
+                for field, value in values.items():
+                    setattr(membership, field, value)
     # Replace earlier demo and community-photo seed records on upgrade. Saved
     # analyses retain their denormalized product text and provenance.
     retired_sources = ("demo", "open_food_facts", "public_catalog")

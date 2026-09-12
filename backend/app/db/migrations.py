@@ -19,6 +19,28 @@ PRODUCT_COLUMNS = {
     "is_demo": "BOOLEAN NOT NULL DEFAULT 1",
 }
 
+INGREDIENT_COLUMNS = {
+    "normalized_name": "VARCHAR(160)",
+    "inci_name": "VARCHAR(160)",
+    "cas_number": "VARCHAR(80)",
+    "is_active": "BOOLEAN NOT NULL DEFAULT 1",
+}
+
+ALIAS_COLUMNS = {
+    "alias_type": "VARCHAR(40) NOT NULL DEFAULT 'common_name'",
+    "source": "VARCHAR(500)",
+    "confidence": "FLOAT NOT NULL DEFAULT 1.0",
+}
+
+EVIDENCE_COLUMNS = {
+    "source_type": "VARCHAR(80)",
+    "evidence_quality": "VARCHAR(40)",
+    "jurisdiction": "VARCHAR(80)",
+    "exposure_route": "VARCHAR(80)",
+    "restriction_condition": "TEXT",
+    "retrieved_at": "DATETIME",
+}
+
 SCAN_HISTORY_COLUMNS = {
     "product_id": "VARCHAR(36)",
     "product_brand": "VARCHAR(160)",
@@ -35,6 +57,16 @@ def apply_local_schema_migrations(engine: Engine) -> None:
     inspector = inspect(engine)
     with engine.begin() as connection:
         tables = set(inspector.get_table_names())
+        for table_name, columns in (
+            ("ingredients", INGREDIENT_COLUMNS),
+            ("ingredient_aliases", ALIAS_COLUMNS),
+            ("evidence_records", EVIDENCE_COLUMNS),
+        ):
+            if table_name in tables:
+                existing = {column["name"] for column in inspector.get_columns(table_name)}
+                for name, definition in columns.items():
+                    if name not in existing:
+                        connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {name} {definition}"))
         if "products" in tables:
             existing_products = {column["name"] for column in inspector.get_columns("products")}
             for name, definition in PRODUCT_COLUMNS.items():
