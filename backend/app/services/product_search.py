@@ -24,7 +24,13 @@ class ProductSearchService:
         category = self._clean(category)
         barcode = self._clean(barcode)
         if not any((query, brand, category, barcode)):
-            return []
+            return list(
+                self.db.scalars(
+                    select(Product)
+                    .order_by(Product.brand.asc(), Product.name.asc())
+                    .limit(limit)
+                ).all()
+            )
 
         filters = []
         if barcode:

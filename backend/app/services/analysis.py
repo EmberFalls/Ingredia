@@ -13,6 +13,7 @@ from app.schemas import (
 )
 from app.services.normalizer import IngredientNormalizer
 from app.services.parser import IngredientParser
+from app.services.personal_context import PersonalContextService
 from app.services.scoring import ScoringService, score_band
 
 DISCLAIMER = "The score reflects evidence-backed ingredient concerns in the configured data sources. It is not a diagnosis or a measure of actual absorbed dose."
@@ -29,6 +30,7 @@ class AnalysisService:
         tokens = self.parser.parse(request.ingredient_text)
         normalized = [self.normalizer.normalize(token) for token in tokens]
         user_preferences = self._preferences(request.user_id)
+        personal_context = PersonalContextService(self.db, request.user_id)
         output: list[IngredientAnalysisOut] = []
         unknowns: list[str] = []
         score_inputs = []
@@ -38,7 +40,15 @@ class AnalysisService:
         for position, (token, resolved) in enumerate(zip(tokens, normalized)):
             if not resolved.ingredient:
                 unknowns.append(token)
-                output.append(IngredientAnalysisOut(position=position, raw_token=token, canonical_name=None, match=None, concern_score=0, evidence=[], personal_alert=None))
+                context_match = personal_context.match(token, None, None)
+                personal_alert = None
+                if context_match:
+                    alerts += 1
+                    personal_alert = PersonalAlertOut(
+                        preference_type=context_match.preference_type,
+                        message=context_match.message,
+                    )
+                output.append(IngredientAnalysisOut(position=position, raw_token=token, canonical_name=None, match=None, concern_score=0, evidence=[], personal_alert=personal_alert))
                 continue
             ingredient = resolved.ingredient
             evidence = [record for record in ingredient.evidence_records if record.is_active]
@@ -47,9 +57,13 @@ class AnalysisService:
                 high_confidence_flags += 1
             preference = user_preferences.get(ingredient.id)
             personal_alert = None
-            if preference:
+            context_match = personal_context.match(token, ingredient.canonical_name, preference)
+            if context_match:
                 alerts += 1
-                personal_alert = PersonalAlertOut(preference_type=preference, message=f"Matches your configured {preference} preference.")
+                personal_alert = PersonalAlertOut(
+                    preference_type=context_match.preference_type,
+                    message=context_match.message,
+                )
             # Keep the full parsed output, but score a canonical ingredient only once.
             # Duplicate label entries should not inflate a product-level concern score.
             if ingredient.id not in scored_ingredient_ids:

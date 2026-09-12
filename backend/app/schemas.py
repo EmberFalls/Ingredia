@@ -29,7 +29,7 @@ class AnalyzeTextRequest(BaseModel):
     product_id: str | None = Field(default=None, max_length=36)
     product_brand: str | None = Field(default=None, max_length=160)
     product_category: str | None = Field(default=None, max_length=80)
-    product_image_url: str | None = Field(default=None, max_length=500)
+    product_image_url: str | None = Field(default=None, max_length=2_500)
     product_source_name: str | None = Field(default=None, max_length=160)
     product_source_type: str | None = Field(default=None, max_length=40)
     user_id: str | None = Field(default=None, max_length=100)
@@ -143,6 +143,29 @@ class UserProfileRequest(BaseModel):
 
 class UserProfileOut(UserProfileRequest):
     user_id: str
+
+
+class RegisterRequest(BaseModel):
+    email: str = Field(min_length=5, max_length=320, pattern=r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+    password: str = Field(min_length=8, max_length=128)
+    display_name: str = Field(min_length=1, max_length=120)
+
+
+class LoginRequest(BaseModel):
+    email: str = Field(min_length=5, max_length=320)
+    password: str = Field(min_length=1, max_length=128)
+
+
+class AccountOut(BaseModel):
+    id: str
+    email: str
+    display_name: str | None
+
+
+class AuthOut(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    account: AccountOut
 
 
 class HistoryItemOut(BaseModel):

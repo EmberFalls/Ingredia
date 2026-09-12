@@ -1,12 +1,12 @@
 # Ingredient Intelligence Platform
 
-Local-first prototype for transparent ingredient-list analysis. It parses pasted or OCR-extracted labels, resolves aliases, returns source-linked evidence, creates a deterministic evidence-concern score, and keeps personal alerts separate from that general score.
+Complete local-first web product for transparent ingredient-list analysis. It parses pasted or OCR-extracted labels, resolves aliases and nested constituents, returns source-linked evidence, creates a deterministic evidence-concern score, and keeps personal alerts separate from that general score.
 
 The included frontend is configured to run locally at `http://localhost:3000` and connect to this API.
 
 ## Frontend
 
-The React frontend lives in `frontend/`. It provides label OCR, catalog and barcode search, evidence detail, saved profiles and history, product comparison, and catalog-data reporting.
+The React frontend lives in `frontend/`. It provides account creation and login, guided onboarding, in-browser label OCR, catalog and barcode search, evidence detail, editable profiles and preferences, saved history, product comparison, and catalog-data reporting.
 
 ```powershell
 cd frontend
@@ -35,6 +35,10 @@ python -m pytest
 ## Implemented API
 
 - `GET /api/v1/health`
+- `POST /api/v1/auth/register`
+- `POST /api/v1/auth/login`
+- `GET /api/v1/auth/me`
+- `POST /api/v1/auth/logout`
 - `POST /api/v1/analyses/text`
 - `GET /api/v1/ingredients?query=...`
 - `GET /api/v1/ingredients/{ingredient_id}`
@@ -44,14 +48,21 @@ python -m pytest
 - `POST /api/v1/products/{product_id}/reports`
 - `PUT /api/v1/users/{user_id}/preferences`
 - `GET /api/v1/users/{user_id}/preferences`
+- `DELETE /api/v1/users/{user_id}/preferences/{ingredient_id}`
 - `GET|PUT /api/v1/users/{user_id}/profile`
 - `GET /api/v1/users/{user_id}/history`
+- `DELETE /api/v1/users/{user_id}/history/{history_id}`
+- `DELETE /api/v1/users/{user_id}/history`
 - `POST /api/v1/comparisons`
 
-API responses include request IDs, conservative security headers, and a configurable local rate limit. Catalog imports reconcile matching barcodes across providers, and catalog records retain source and retrieval metadata.
+Passwords are salted and hashed with PBKDF2-SHA256. Random 30-day bearer sessions are stored as hashes, and persisted account data is protected by matching-session checks. API responses include request IDs, conservative security headers, and a configurable local rate limit. Catalog imports reconcile matching barcodes across providers, and catalog records retain source and retrieval metadata.
 
-## Production boundary
+The seeded catalog contains 100 stored records: image-backed food records attributed to Open Food Facts plus clearly marked fictional development products with deterministic local artwork and analyzable labels. External Open Food Facts discovery is optional and falls back to the stored local catalog. Product labels can change; the UI exposes provenance and a report-data flow.
 
-The current `local-demo` user and SQLite database are development-only. Before public deployment, connect a real identity provider, enforce ownership from verified server-side identity, use a shared production database with versioned migrations, and replace the in-memory rate limiter with a distributed service. Do not place OAuth secrets or database credentials in the frontend or commit them to Git.
+OCR runs in the browser with Tesseract.js. The selected language data may be fetched the first time that language is used; recognized text is shown for review before analysis.
 
-The score is an evidence-backed concern indicator, not a diagnosis, an exposure measurement, or a prediction of harm. Source-linked seed records are intentionally conservative and require ongoing domain review before real-world reliance.
+## Local-product boundary
+
+This repository is intentionally complete for local use, not deployment or multi-instance scale. It uses SQLite, local email/password accounts, and a browser-stored session token. Google sign-in is intentionally not shown because OAuth cannot be made real without a registered Google client and redirect credentials.
+
+The score is an evidence-backed concern indicator, not a diagnosis, an exposure measurement, or a prediction of harm. Unknown ingredients are displayed neutrally, and personal profile matches never alter the general score. The curated evidence set is intentionally conservative and should not replace checking packaging or professional medical advice.
