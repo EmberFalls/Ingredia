@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db.models import Product
@@ -17,11 +17,14 @@ class ProductImportService:
 
     def upsert(self, item: ProviderProduct) -> Product:
         barcode = item.barcode or item.external_id
-        statement = select(Product).where(Product.source_name == item.provider)
+        statement = select(Product)
         if barcode:
             statement = statement.where(Product.barcode == barcode)
         else:
-            statement = statement.where(Product.name == item.name, Product.brand == (item.brand or "Unknown brand"))
+            statement = statement.where(
+                func.lower(Product.name) == item.name.casefold(),
+                func.lower(Product.brand) == (item.brand or "Unknown brand").casefold(),
+            )
         product = self.db.scalar(statement)
         if not product:
             product = Product(name=item.name, brand=item.brand or "Unknown brand", ingredient_text="")

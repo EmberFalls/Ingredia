@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     product_discovery_external_enabled: bool = True
     product_discovery_timeout_seconds: float = 4.0
     open_food_facts_base_url: str = "https://world.openfoodfacts.org"
+    rate_limit_requests_per_minute: int = 120
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

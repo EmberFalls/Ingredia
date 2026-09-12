@@ -53,6 +53,11 @@ class IngredientNormalizer:
         without_percent = re.sub(r"\s*\d+(?:\.\d+)?\s*%\s*$", "", raw_token).strip()
         if without_percent != raw_token:
             forms.append(without_percent)
+        if ":" in without_percent:
+            forms.append(without_percent.rsplit(":", 1)[1].strip())
+        without_quantity = re.sub(r"\s+\d+(?:\.\d+)?\s*%?\s*$", "", without_percent).strip()
+        if without_quantity and without_quantity != without_percent:
+            forms.append(without_quantity)
         for part in re.split(r"\s*/\s*", without_percent):
             if part:
                 forms.append(part)

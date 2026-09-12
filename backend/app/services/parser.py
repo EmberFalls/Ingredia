@@ -4,26 +4,23 @@ import re
 
 
 class IngredientParser:
-    """Split label text while preserving parentheses that are part of one ingredient."""
+    """Split a label into both primary ingredients and nested constituents.
+
+    Parentheses and brackets commonly contain allergen-relevant sub-ingredients
+    (for example, milk chocolate ingredients or ``lecithins [soya]``). Flattening
+    those groups makes each declared constituent available to the normalizer.
+    """
 
     def parse(self, raw_text: str) -> list[str]:
         cleaned = re.sub(r"\bingredients?\s*:\s*", "", raw_text, flags=re.IGNORECASE).strip()
         if not cleaned:
             return []
+        # Group boundaries become delimiters so nested declarations are not
+        # hidden inside one otherwise-unresolvable compound token.
+        flattened = re.sub(r"[()\[\]{}]", ",", cleaned)
         tokens: list[str] = []
-        buffer: list[str] = []
-        depth = 0
-        for char in cleaned:
-            if char in "([":
-                depth += 1
-            elif char in ")]" and depth:
-                depth -= 1
-            if char in ",;\n" and depth == 0:
-                self._append_token(tokens, "".join(buffer))
-                buffer = []
-            else:
-                buffer.append(char)
-        self._append_token(tokens, "".join(buffer))
+        for candidate in re.split(r"[,;\n]", flattened):
+            self._append_token(tokens, candidate)
         return tokens
 
     @staticmethod
