@@ -57,7 +57,7 @@ python -m pytest
 
 Passwords are salted and hashed with PBKDF2-SHA256. Random 30-day bearer sessions are stored as hashes, and persisted account data is protected by matching-session checks. API responses include request IDs, conservative security headers, and a configurable local rate limit. Catalog imports reconcile matching barcodes across providers, and catalog records retain source and retrieval metadata.
 
-The seeded catalog contains 100 stored records: image-backed food records attributed to Open Food Facts plus clearly marked fictional development products with deterministic local artwork and analyzable labels. External Open Food Facts discovery is optional and falls back to the stored local catalog. Product labels can change; the UI exposes provenance and a report-data flow.
+The seeded catalog contains 100 packaged-food records collected from official Snackworks product pages. Every record includes a manufacturer-supplied package image, UPC/GTIN, exact ingredient label, and first-party provenance URL. External Open Food Facts discovery remains available for uncached searches, while the default stored catalog uses only the curated official records. Product labels can change; the UI exposes provenance and a report-data flow.
 
 OCR runs in the browser with Tesseract.js. The selected language data may be fetched the first time that language is used; recognized text is shown for review before analysis.
 

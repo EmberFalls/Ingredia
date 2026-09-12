@@ -1,4 +1,6 @@
+import json
 from html import escape
+from pathlib import Path
 from urllib.parse import quote
 
 from sqlalchemy import select
@@ -272,22 +274,31 @@ def expanded_demo_products() -> list[dict[str, object]]:
     return products
 
 
-# 16 hand-curated records above + 84 deterministic demo products = 100
-# stored products on a clean local database.
-SEED_PRODUCTS.extend(expanded_demo_products())
-for product in SEED_PRODUCTS:
-    if product["is_demo"] and not product.get("image_url"):
-        product["image_url"] = _demo_package_image(
-            str(product["brand"]), str(product["name"]), "#176b5b", "#d9f2e9"
-        )
+CATALOG_DATA_PATH = Path(__file__).with_name("official_product_catalog.json")
 
+
+def _load_real_catalog() -> list[dict[str, object]]:
+    """Load the checked-in, first-party official product catalog snapshot."""
+    records = json.loads(CATALOG_DATA_PATH.read_text(encoding="utf-8"))
+    if not isinstance(records, list) or len(records) < 100:
+        raise RuntimeError("The real product catalog must contain at least 100 records.")
+    required = {"name", "brand", "barcode", "ingredient_text", "image_url", "source_url"}
+    if any(not isinstance(item, dict) or not required.issubset(item) for item in records):
+        raise RuntimeError("The real product catalog contains an incomplete product record.")
+    return records
+
+
+# A static snapshot makes the app usable offline. Every entry has a first-party
+# product page, exact ingredient label, UPC/GTIN, and official package image.
+SEED_PRODUCTS = _load_real_catalog()
 SEED_BRAND_SOURCES = [
-    {"brand_name": "Calmline", "search_strategy": "MANUAL_ONLY", "enabled": False, "terms_notes": "Fictional development brand; no external site is queried."},
-    {"brand_name": "Northstar Pantry", "search_strategy": "MANUAL_ONLY", "enabled": False, "terms_notes": "Fictional development brand; no external site is queried."},
-    *[
-        {"brand_name": brand, "search_strategy": "MANUAL_ONLY", "enabled": False, "terms_notes": "Fictional development brand used for local catalog testing."}
-        for brand, _, _ in DEMO_BRANDS
-    ],
+    {
+        "brand_name": str(product["brand"]),
+        "search_strategy": "MANUAL_ONLY",
+        "enabled": False,
+        "terms_notes": "Brand product data sourced from its official Snackworks product page.",
+    }
+    for product in SEED_PRODUCTS
 ]
 
 
@@ -306,11 +317,25 @@ def seed_database(db: Session) -> None:
                 ingredient.aliases.append(IngredientAlias(alias=alias, normalized_alias=normalized))
                 existing_aliases.add(normalized)
     db.flush()
+    # Replace earlier demo and community-photo seed records on upgrade. Saved
+    # analyses retain their denormalized product text and provenance.
+    retired_sources = ("demo", "open_food_facts", "public_catalog")
+    for product in db.scalars(
+        select(Product).where(
+            (Product.is_demo.is_(True)) | (Product.source_type.in_(retired_sources))
+        )
+    ).all():
+        db.delete(product)
+    for source in db.scalars(
+        select(BrandSource).where(BrandSource.terms_notes.ilike("%fictional%"))
+    ).all():
+        db.delete(source)
+    db.flush()
     for item in SEED_PRODUCTS:
         product = db.scalar(select(Product).where(Product.name == item["name"], Product.brand == item["brand"]))
         if not product:
             db.add(Product(**item))
-        elif product.is_demo:
+        else:
             for field, value in item.items():
                 setattr(product, field, value)
     for item in SEED_BRAND_SOURCES:

@@ -1,5 +1,8 @@
 import json
+from html import escape
+from urllib.parse import unquote, urlparse
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import delete, or_, select
 from sqlalchemy.orm import Session, selectinload
@@ -144,6 +147,52 @@ def product_detail(product_id: str, db: Session = Depends(get_db)) -> ProductOut
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
     return _product_out(product)
+
+
+@router.get("/products/{product_id}/image")
+def product_image(product_id: str, db: Session = Depends(get_db)) -> Response:
+    """Return a browser-safe catalog image with an always-available fallback.
+
+    Verified package photos are proxied only from curated product-content
+    hosts used by the checked-in catalog. If a source host is temporarily
+    unavailable, the card still gets an accurate local label illustration
+    instead of a broken-image icon.
+    """
+    product = db.get(Product, product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    image_url = (product.image_url or "").strip()
+    if image_url.startswith("data:image/svg+xml,"):
+        return Response(
+            content=unquote(image_url.split(",", 1)[1]),
+            media_type="image/svg+xml",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+
+    parsed = urlparse(image_url)
+    trusted_product_image_hosts = {
+        "images.salsify.com",
+        "images.openfoodfacts.net",
+    }
+    if parsed.scheme == "https" and parsed.hostname in trusted_product_image_hosts:
+        try:
+            source = httpx.get(image_url, timeout=4.0, follow_redirects=True)
+            content_type = source.headers.get("content-type", "").split(";", 1)[0]
+            if source.is_success and content_type.startswith("image/"):
+                return Response(
+                    content=source.content,
+                    media_type=content_type,
+                    headers={"Cache-Control": "public, max-age=86400"},
+                )
+        except httpx.HTTPError:
+            pass
+
+    return Response(
+        content=_catalog_image_fallback(product),
+        media_type="image/svg+xml",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
 
 
 @router.post("/products/{product_id}/analyze", response_model=AnalyzeTextResponse, status_code=status.HTTP_201_CREATED)
@@ -327,6 +376,24 @@ def _product_out(item: Product) -> ProductOut:
         source_confidence=item.source_confidence, label_verified_at=item.label_verified_at,
         source_retrieved_at=item.source_retrieved_at, is_demo=item.is_demo,
         ingredients_available=bool(item.ingredient_text.strip()),
+    )
+
+
+def _catalog_image_fallback(product: Product) -> str:
+    """A local labelled image used only when a source package photo is unavailable."""
+    brand = escape(product.brand or "IngredientIQ")
+    name = escape(product.name or "Catalog product")
+    category = escape((product.category or "product").replace("_", " ").title())
+    return (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480" viewBox="0 0 640 480">'
+        '<rect width="640" height="480" fill="#edf7f3"/>'
+        '<rect x="74" y="44" width="492" height="392" rx="34" fill="#ffffff" stroke="#cde4db" stroke-width="4"/>'
+        '<circle cx="320" cy="164" r="68" fill="#176b5b"/>'
+        '<path d="M289 164h62M320 133v62" stroke="#dff4ec" stroke-width="12" stroke-linecap="round"/>'
+        f'<text x="320" y="280" text-anchor="middle" font-family="Arial, sans-serif" font-size="31" font-weight="700" fill="#173a32">{brand}</text>'
+        f'<text x="320" y="322" text-anchor="middle" font-family="Arial, sans-serif" font-size="25" fill="#31594e">{name}</text>'
+        f'<text x="320" y="374" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" letter-spacing="2" fill="#6b887e">{category} · CATALOG LABEL</text>'
+        '</svg>'
     )
 
 

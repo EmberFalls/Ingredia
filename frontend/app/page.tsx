@@ -59,6 +59,8 @@ import {
 
 const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://127.0.0.1:8000/api/v1';
+const catalogImageUrl = (productId: string) =>
+  `${API_BASE}/products/${encodeURIComponent(productId)}/image`;
 function accountHeaders(json = false): Record<string, string> {
   const headers: Record<string, string> = json
     ? { 'Content-Type': 'application/json' }
@@ -687,7 +689,7 @@ function Landing({
           </div>
           <div className="landing-proof">
             <span>
-              <b>5</b> seeded catalog products
+              <b>100</b> catalog products
             </span>
             <span>
               <b>19</b> normalized ingredient records
@@ -808,9 +810,9 @@ function Landing({
             <p className="eyebrow">Current local catalog</p>
             <h3>Built to grow beyond a static ingredient checker.</h3>
             <p>
-              The local development catalog begins with five clearly labelled
-              demo products across food and personal care. Product records
-              preserve their source, confidence, and label-verification date.
+              The local catalog contains 100 searchable packaged-food products.
+              Every record includes its official package image, UPC, ingredient
+              label, and first-party product-page provenance.
             </p>
             <Button variant="outline" onClick={onSignup}>
               Search the catalog <ArrowRight />
@@ -2285,7 +2287,11 @@ function HistoryPage({
                   <div className="history-product__fallback">
                     {item.product_image_url ? (
                       <img
-                        src={item.product_image_url}
+                        src={
+                          item.product_id
+                            ? catalogImageUrl(item.product_id)
+                            : item.product_image_url
+                        }
                         alt={`${item.product_name ?? 'Product'} package`}
                       />
                     ) : (
@@ -2624,7 +2630,11 @@ function CatalogPage({
           <article key={item.id}>
             <div className="catalog-product-mark">
               {item.image_url ? (
-                <img src={item.image_url} alt={`${item.name} package`} />
+                <img
+                  src={catalogImageUrl(item.id)}
+                  alt={`${item.name} package`}
+                  loading="lazy"
+                />
               ) : (
                 <Layers3 size={20} />
               )}

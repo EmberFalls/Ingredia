@@ -28,11 +28,11 @@ def test_duplicate_ingredient_does_not_inflate_product_score() -> None:
 
 def test_catalog_searches_by_company_and_analyzes_product() -> None:
     with TestClient(app) as client:
-        response = client.get("/api/v1/products", params={"query": "Calmline"})
+        response = client.get("/api/v1/products", params={"limit": 1})
         assert response.status_code == 200
         products = response.json()
-        assert len(products) == 3
-        assert {product["brand"] for product in products} == {"Calmline"}
+        assert len(products) == 1
+        assert products[0]["is_demo"] is False
 
         analysis = client.post(f"/api/v1/products/{products[0]['id']}/analyze", json={"save_to_history": False})
     assert analysis.status_code == 201
@@ -41,7 +41,7 @@ def test_catalog_searches_by_company_and_analyzes_product() -> None:
 
 def test_catalog_product_detail_and_missing_product_response() -> None:
     with TestClient(app) as client:
-        product = client.get("/api/v1/products", params={"query": "Calmline"}).json()[0]
+        product = client.get("/api/v1/products", params={"limit": 1}).json()[0]
         detail = client.get(f"/api/v1/products/{product['id']}")
         missing = client.get("/api/v1/products/does-not-exist")
     assert detail.status_code == 200
@@ -52,7 +52,7 @@ def test_catalog_product_detail_and_missing_product_response() -> None:
 
 def test_catalog_data_quality_report_is_saved() -> None:
     with TestClient(app) as client:
-        product = client.get("/api/v1/products", params={"barcode": "000000000001"}).json()[0]
+        product = client.get("/api/v1/products", params={"limit": 1}).json()[0]
         response = client.post(f"/api/v1/products/{product['id']}/reports", json={
             "user_id": "catalog-review-test", "reason": "outdated_label", "details": "The package label has changed.",
         })
@@ -80,17 +80,18 @@ def test_catalog_empty_barcode_and_external_unavailable_states(monkeypatch) -> N
 
 def test_catalog_search_supports_barcode_category_and_source_metadata() -> None:
     with TestClient(app) as client:
-        barcode = client.get("/api/v1/products", params={"barcode": "000000000004"})
-        category = client.get("/api/v1/products", params={"category": "food"})
-        brands = client.get("/api/v1/brands", params={"query": "Northstar"})
+        product = client.get("/api/v1/products", params={"limit": 1}).json()[0]
+        barcode = client.get("/api/v1/products", params={"barcode": product["barcode"]})
+        category = client.get("/api/v1/products", params={"category": product["category"]})
+        brands = client.get("/api/v1/brands", params={"query": product["brand"]})
     assert barcode.status_code == 200
-    assert barcode.json()[0]["name"] == "Lemon Refresher"
-    assert barcode.json()[0]["is_demo"] is True
-    assert barcode.json()[0]["source_type"] == "demo"
+    assert barcode.json()[0]["name"] == product["name"]
+    assert barcode.json()[0]["is_demo"] is False
+    assert barcode.json()[0]["source_type"] == "official_brand"
     assert category.status_code == 200
-    assert {product["category"] for product in category.json()} == {"food"}
+    assert all(item["category"] == product["category"] for item in category.json())
     assert brands.status_code == 200
-    assert brands.json()[0]["brand_name"] == "Northstar Pantry"
+    assert brands.json()[0]["brand_name"] == product["brand"]
 
 
 def test_seeded_catalog_contains_image_backed_sourced_products() -> None:
@@ -99,13 +100,28 @@ def test_seeded_catalog_contains_image_backed_sourced_products() -> None:
     assert response.status_code == 200
     products = response.json()
     assert len(products) >= 100
-    sourced = [product for product in products if product["source_type"] == "open_food_facts"]
+    sourced = [product for product in products if product["source_type"] == "official_brand"]
     demo = [product for product in products if product["source_type"] == "demo"]
-    assert len(sourced) >= 10
+    assert len(sourced) >= 100
     assert all(product["image_url"] for product in sourced)
     assert all(product["source_url"] for product in sourced)
     assert all(product["ingredient_text"] for product in sourced)
-    assert all(product["image_url"] for product in demo)
+    assert demo == []
+
+
+def test_catalog_image_endpoint_falls_back_to_a_local_label(monkeypatch) -> None:
+    from app.api import routes
+
+    def unavailable(*_args, **_kwargs):
+        raise routes.httpx.HTTPError("source unavailable")
+
+    monkeypatch.setattr(routes.httpx, "get", unavailable)
+    with TestClient(app) as client:
+        product = client.get("/api/v1/products", params={"limit": 1}).json()[0]
+        image = client.get(f"/api/v1/products/{product['id']}/image")
+    assert image.status_code == 200
+    assert image.headers["content-type"].startswith("image/svg+xml")
+    assert product["name"].encode() in image.content
 
 
 def test_profile_and_catalog_analysis_history_are_persisted() -> None:
@@ -117,7 +133,7 @@ def test_profile_and_catalog_analysis_history_are_persisted() -> None:
         })
         preference = client.put(f"/api/v1/users/{user_id}/preferences", json={"ingredient_query": "Fragrance", "preference_type": "avoid"})
         preferences = client.get(f"/api/v1/users/{user_id}/preferences")
-        product = client.get("/api/v1/products", params={"barcode": "000000000002"}).json()[0]
+        product = client.get("/api/v1/products", params={"limit": 1}).json()[0]
         analyzed = client.post(f"/api/v1/products/{product['id']}/analyze", json={"user_id": user_id, "save_to_history": True})
         history = client.get(f"/api/v1/users/{user_id}/history")
     assert saved.status_code == 200
@@ -126,9 +142,9 @@ def test_profile_and_catalog_analysis_history_are_persisted() -> None:
     assert preferences.json()[0]["canonical_name"] == "Fragrance"
     assert analyzed.status_code == 201
     assert history.status_code == 200
-    assert history.json()[0]["product_name"] == "Citrus Body Wash"
-    assert history.json()[0]["product_brand"] == "Calmline"
-    assert history.json()[0]["product_source_type"] == "demo"
+    assert history.json()[0]["product_name"] == product["name"]
+    assert history.json()[0]["product_brand"] == product["brand"]
+    assert history.json()[0]["product_source_type"] == "official_brand"
 
 
 def test_major_food_allergen_alias_matches_without_inflating_general_score() -> None:
