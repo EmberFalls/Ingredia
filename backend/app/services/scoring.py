@@ -17,7 +17,7 @@ class ScoringService:
     def ingredient_score(self, evidence: list[EvidenceRecord], product_category: str | None) -> int:
         applicable = [
             record for record in evidence
-            if record.is_active and getattr(record, "source_url", "test-record") and self._applies(record, product_category)
+            if record.is_active and getattr(record, "source_url", "test-record") and self.applicability_status(record, product_category) in {"direct", "likely"}
         ]
         # Use the strongest source per concern type so copied sources cannot inflate scores.
         strongest: dict[str, float] = {}
@@ -29,14 +29,15 @@ class ScoringService:
     def ingredient_reasons(self, evidence: list[EvidenceRecord], product_category: str | None) -> list[dict[str, object]]:
         reasons: list[dict[str, object]] = []
         for record in evidence:
-            if not record.is_active or not getattr(record, "source_url", "test-record") or not self._applies(record, product_category):
+            status = self.applicability_status(record, product_category)
+            if not record.is_active or not getattr(record, "source_url", "test-record") or status not in {"direct", "likely"}:
                 continue
             reasons.append({
                 "evidence_id": getattr(record, "id", f"test-{record.concern_type}"),
                 "claim_type": record.concern_type,
                 "severity": record.severity,
                 "confidence": record.confidence,
-                "applicability": 1.0,
+                "applicability": status,
                 "contribution": round(record.severity * record.confidence * 5, 2),
                 "source_name": getattr(record, "source_name", "Test evidence"),
                 "source_url": getattr(record, "source_url", None),
@@ -68,8 +69,20 @@ class ScoringService:
         return ScoreResult(score=min(100, round(total)), contributors=contributors)
 
     @staticmethod
-    def _applies(record: EvidenceRecord, product_category: str | None) -> bool:
-        return record.applicability in {"general", "all"} or record.applicability == product_category
+    def applicability_status(record: EvidenceRecord, product_category: str | None) -> str:
+        scope = (record.applicability or "general").replace("_", " ").casefold()
+        category = (product_category or "").replace("_", " ").casefold()
+        if scope in {"general", "all"} or scope == category:
+            return "direct"
+        if not category:
+            return "background"
+        food_terms = {"food", "snack", "beverage", "drink", "noodle", "meal", "bakery", "dairy"}
+        personal_care_terms = {"personal care", "cosmetic", "skin", "hair", "body", "toiletry"}
+        if scope == "food" and any(term in category for term in food_terms):
+            return "likely"
+        if scope == "personal care" and any(term in category for term in personal_care_terms):
+            return "likely"
+        return "not_applicable"
 
 
 def score_band(score: int) -> str:

@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  type ReactNode,
   useEffect,
   useRef,
   useState,
@@ -58,8 +59,39 @@ import {
 
 const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://127.0.0.1:8000/api/v1';
+const isPublicPreview = () =>
+  typeof window !== 'undefined' &&
+  window.location.hostname.endsWith('.chatgpt.site');
+const PREVIEW_ACCOUNT: Account = {
+  id: 'public-preview',
+  email: 'preview@ingredia.app',
+  display_name: 'Preview',
+};
+const PREVIEW_PROFILE: UserProfile = {
+  user_id: PREVIEW_ACCOUNT.id,
+  display_name: PREVIEW_ACCOUNT.display_name,
+  avatar_url: null,
+  dietary_preferences: ['Vegetarian'],
+  cultural_considerations: [],
+  additional_requirements: null,
+};
 const catalogImageUrl = (productId: string) =>
-  `${API_BASE}/products/${encodeURIComponent(productId)}/image`;
+  // Versioning clears the earlier cached fallback response for Open Food
+  // Facts `.org` images, which are now handled by the backend proxy.
+  `${API_BASE}/products/${encodeURIComponent(productId)}/image?v=2`;
+const xmlEscape = (value: string) =>
+  value.replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;',
+  })[character] ?? character);
+const productImageFallback = (product: Pick<CatalogProduct, 'name' | 'brand'>) =>
+  `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480"><rect width="100%" height="100%" fill="#edf7f3"/><rect x="70" y="42" width="500" height="396" rx="32" fill="white" stroke="#cde4db" stroke-width="4"/><circle cx="320" cy="160" r="66" fill="#176b5b"/><path d="M289 160h62M320 129v62" stroke="#dff4ec" stroke-width="12" stroke-linecap="round"/><text x="320" y="280" text-anchor="middle" font-family="Arial" font-size="30" font-weight="700" fill="#173a32">${xmlEscape(product.brand)}</text><text x="320" y="324" text-anchor="middle" font-family="Arial" font-size="24" fill="#31594e">${xmlEscape(product.name)}</text></svg>`)}`;
+const recoverProductImage = (
+  event: React.SyntheticEvent<HTMLImageElement>,
+  product: Pick<CatalogProduct, 'name' | 'brand'>,
+) => {
+  event.currentTarget.onerror = null;
+  event.currentTarget.src = productImageFallback(product);
+};
 function accountHeaders(json = false): Record<string, string> {
   const headers: Record<string, string> = json
     ? { 'Content-Type': 'application/json' }
@@ -85,11 +117,13 @@ type Evidence = {
   retrieved_at: string | null;
   summary: string;
   applicability: string;
+  applicability_status: 'direct' | 'likely' | 'background' | 'not_applicable';
   limitations: string | null;
 };
 type Ingredient = {
   position: number;
   raw_token: string;
+  parent_context?: string | null;
   canonical_name: string | null;
   ingredient_id: string | null;
   match: {
@@ -196,10 +230,31 @@ type CatalogProduct = {
   is_demo: boolean;
   ingredients_available: boolean;
 };
+const PREVIEW_CATALOG: CatalogProduct[] = [
+  {
+    id: 'preview-maggi',
+    name: 'Maggi noodles masala',
+    brand: 'Nestlé',
+    category: 'instant noodles',
+    barcode: '8901058000306',
+    ingredient_text: 'Refined wheat flour, palm oil, iodized salt, wheat gluten, acidity regulators, spices, sugar.',
+    image_url: 'https://images.openfoodfacts.org/images/products/890/105/800/0306/front_en.10.400.jpg',
+    description: 'A preview catalog record shown without the hosted API.',
+    source_type: 'public_catalog',
+    source_name: 'Open Food Facts',
+    source_url: 'https://world.openfoodfacts.org/product/8901058000306',
+    source_confidence: 0.8,
+    label_verified_at: null,
+    source_retrieved_at: null,
+    is_demo: false,
+    ingredients_available: true,
+  },
+];
 type ProfileSetup = {
-  ingredients: string[];
+  preferences: { ingredient: string; preferenceType: 'allergen' | 'sensitivity' | 'avoid' }[];
   dietaryPreferences: string[];
   culturalConsiderations: string[];
+  additionalRequirements: string | null;
 };
 type UserProfile = {
   user_id: string;
@@ -236,7 +291,19 @@ type HistoryItem = {
   raw_text: string;
   concern_score: number;
   coverage: number;
+  analysis_snapshot: Analysis | null;
+  scoring_version: string | null;
+  evidence_version: string | null;
   created_at: string | null;
+};
+type ExplorerIngredient = {
+  id: string;
+  canonical_name: string;
+  category: string | null;
+  description: string | null;
+  aliases: string[];
+  evidence: Evidence[];
+  families: Ingredient['families'];
 };
 type View = 'analyze' | 'compare' | 'history' | 'catalog' | 'profile';
 type WebModelContext = {
@@ -270,7 +337,7 @@ const tone = (score: number) =>
 
 export default function Home() {
   const [stage, setStage] = useState<
-    'landing' | 'login' | 'signup' | 'onboarding' | 'app'
+    'landing' | 'login' | 'signup' | 'onboarding' | 'app' | 'guest-catalog' | 'guest-analysis'
   >('landing');
   const [name, setName] = useState('');
   const [view, setView] = useState<View>('analyze');
@@ -279,6 +346,9 @@ export default function Home() {
   const [catalogProduct, setCatalogProduct] = useState<CatalogProduct | null>(
     null,
   );
+  const [catalogQuery, setCatalogQuery] = useState('');
+  const [comparisonSeeds, setComparisonSeeds] = useState<CatalogProduct[]>([]);
+  const [guestCatalogQuery, setGuestCatalogQuery] = useState('');
   const [recent, setRecent] = useState<Analysis[]>([]);
   const [selected, setSelected] = useState<Ingredient | null>(null);
   const [preferences, setPreferences] = useState<Preference[]>([]);
@@ -287,6 +357,7 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [account, setAccount] = useState<Account | null>(null);
   const [accessToken, setAccessToken] = useState<string | null>(null);
+  const [publicPreviewMode, setPublicPreviewMode] = useState(false);
   const userId = account?.id ?? 'local-demo';
 
   async function authenticate(
@@ -349,6 +420,7 @@ export default function Home() {
     save = true,
     inputMethod: 'user_pasted' | 'ocr_confirmed' = 'user_pasted',
     sourceProduct: CatalogProduct | null = null,
+    analysisUserId: string | null = userId,
   ) {
     const response = await fetch(`${API_BASE}/analyses/text`, {
       method: 'POST',
@@ -364,7 +436,7 @@ export default function Home() {
         product_source_type: sourceProduct?.source_type,
         product_source_url: sourceProduct?.source_url,
         product_source_retrieved_at: sourceProduct?.source_retrieved_at,
-        user_id: userId,
+        user_id: analysisUserId,
         save_to_history: save,
         input_method: sourceProduct ? 'catalog' : inputMethod,
       }),
@@ -443,14 +515,64 @@ export default function Home() {
       setLoading(false);
     }
   }
-  async function savePreference(ingredient: string) {
+  async function analyzeGuestProduct(product: CatalogProduct) {
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await requestAnalysis(
+        product.ingredient_text,
+        false,
+        'user_pasted',
+        product,
+        null,
+      );
+      setDraft(product.ingredient_text);
+      setCatalogProduct(product);
+      setAnalysis(result);
+      setStage('guest-analysis');
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : 'Something interrupted the analysis.',
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+  async function analyzeGuestLabel(
+    text = draft,
+    inputMethod: 'user_pasted' | 'ocr_confirmed' = 'user_pasted',
+  ) {
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await requestAnalysis(text, false, inputMethod, null, null);
+      setDraft(text);
+      setCatalogProduct(null);
+      setAnalysis(result);
+      setStage('guest-analysis');
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : 'Something interrupted the analysis.',
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+  async function savePreference(
+    ingredient: string,
+    preferenceType: 'allergen' | 'sensitivity' | 'avoid' = 'avoid',
+  ) {
     try {
       const response = await fetch(`${API_BASE}/users/${userId}/preferences`, {
         method: 'PUT',
         headers: accountHeaders(true),
         body: JSON.stringify({
           ingredient_query: ingredient,
-          preference_type: 'sensitivity',
+          preference_type: preferenceType,
         }),
       });
       if (!response.ok) throw new Error();
@@ -533,21 +655,62 @@ export default function Home() {
               ingredients_available: true,
             }
           : null);
-      const result = await requestAnalysis(
-        item.raw_text,
-        false,
-        'user_pasted',
-        product,
-      );
       setDraft(item.raw_text);
       setCatalogProduct(product);
-      setAnalysis(result);
+      // A saved history entry is an immutable analysis receipt. For entries
+      // created before snapshots existed, retain the safe re-analysis fallback.
+      setAnalysis(
+        item.analysis_snapshot ??
+          (await requestAnalysis(item.raw_text, false, 'user_pasted', product)),
+      );
     } catch {
       setError('We could not reopen that analysis.');
     } finally {
       setLoading(false);
     }
   }
+  async function openIngredientRecord(ingredientId: string, rawName: string) {
+    try {
+      const response = await fetch(`${API_BASE}/ingredients/${ingredientId}`);
+      if (!response.ok) throw new Error();
+      const record = (await response.json()) as ExplorerIngredient;
+      setSelected({
+        position: 0, raw_token: rawName, canonical_name: record.canonical_name, ingredient_id: record.id,
+        parent_context: null,
+        match: { method: 'catalog_record', confidence: 1, status: 'resolved', normalized_token: record.canonical_name.toLowerCase(), matched_alias: record.canonical_name },
+        concern_score: 0, evidence: record.evidence, personal_alert: null, families: record.families, product_contribution: 0,
+      });
+    } catch {
+      setError('That ingredient record could not be opened.');
+    }
+  }
+  function compareHistoryItem(item: HistoryItem) {
+    const product: CatalogProduct = {
+      id: item.product_id ?? item.id,
+      name: item.product_name ?? 'Saved ingredient analysis',
+      brand: item.product_brand ?? item.product_source_name ?? 'Saved analysis',
+      category: item.product_category,
+      barcode: null,
+      ingredient_text: item.raw_text,
+      image_url: item.product_image_url,
+      description: 'Saved analysis label.',
+      source_type: item.product_source_type ?? 'saved_analysis',
+      source_name: item.product_source_name ?? 'Saved analysis',
+      source_url: null,
+      source_confidence: 0,
+      label_verified_at: null,
+      source_retrieved_at: item.created_at,
+      is_demo: false,
+      ingredients_available: true,
+    };
+    setComparisonSeeds((current) => [
+      ...current.filter((candidate) => candidate.id !== product.id), product,
+    ].slice(-2));
+    setView('compare');
+  }
+  useEffect(() => {
+    setPublicPreviewMode(isPublicPreview());
+  }, []);
   useEffect(() => {
     const savedToken = localStorage.getItem('ingredientiq_session');
     if (!savedToken) return;
@@ -638,6 +801,17 @@ export default function Home() {
       <Landing
         onLogin={() => setStage('login')}
         onSignup={() => setStage('signup')}
+        onOpenPreview={() => {
+          setAccount(PREVIEW_ACCOUNT);
+          setProfile(PREVIEW_PROFILE);
+          setName('Preview');
+          setStage('app');
+        }}
+        showPreview={publicPreviewMode}
+        onOpenCatalog={() => {
+          setGuestCatalogQuery('');
+          setStage('guest-catalog');
+        }}
       />
     );
   if (stage === 'login')
@@ -664,8 +838,8 @@ export default function Home() {
         name={name}
         onSkip={() => setStage('app')}
         onComplete={async (profile) => {
-          for (const ingredient of profile.ingredients)
-            await savePreference(ingredient);
+          for (const preference of profile.preferences)
+            await savePreference(preference.ingredient, preference.preferenceType);
           const response = await fetch(`${API_BASE}/users/${userId}/profile`, {
             method: 'PUT',
             headers: accountHeaders(true),
@@ -673,6 +847,7 @@ export default function Home() {
               display_name: name || null,
               dietary_preferences: profile.dietaryPreferences,
               cultural_considerations: profile.culturalConsiderations,
+              additional_requirements: profile.additionalRequirements,
             }),
           });
           if (!response.ok)
@@ -681,6 +856,54 @@ export default function Home() {
           setStage('app');
         }}
       />
+    );
+  if (stage === 'guest-catalog')
+    return (
+      <GuestShell
+        onHome={() => setStage('landing')}
+        onLogin={() => setStage('login')}
+        onSignup={() => setStage('signup')}
+      >
+        <CatalogPage
+          guest
+          initialQuery={guestCatalogQuery}
+          userId="local-demo"
+          onAnalyzeProduct={analyzeGuestProduct}
+        />
+      </GuestShell>
+    );
+  if (stage === 'guest-analysis')
+    return (
+      <GuestShell
+        onHome={() => setStage('landing')}
+        onLogin={() => setStage('login')}
+        onSignup={() => setStage('signup')}
+      >
+        <AnalyzePage
+          name="Guest"
+          draft={draft}
+          setDraft={setDraft}
+          analysis={analysis}
+          catalogProduct={catalogProduct}
+          recent={[]}
+          loading={loading}
+          error={error}
+          onAnalyze={analyzeGuestLabel}
+          onOpenCatalog={(query = '') => {
+            setGuestCatalogQuery(query);
+            setStage('guest-catalog');
+          }}
+          onSelect={setSelected}
+        />
+        <p className="guest-save-note">
+          Create an account to save this analysis, build your safety profile, and view history.
+        </p>
+        <IngredientDrawer
+          ingredient={selected}
+          onClose={() => setSelected(null)}
+          onSave={async () => setError('Create an account to save ingredients to your profile.')}
+        />
+      </GuestShell>
     );
   return (
     <AppShell
@@ -691,6 +914,7 @@ export default function Home() {
       setDraft={setDraft}
       analysis={analysis}
       catalogProduct={catalogProduct}
+      catalogQuery={catalogQuery}
       recent={recent}
       selected={selected}
       setSelected={setSelected}
@@ -705,7 +929,18 @@ export default function Home() {
       onDeletePreference={deletePreference}
       onSaveProfile={saveProfile}
       onOpenHistory={openHistory}
+      onCompareHistory={compareHistoryItem}
       onLogout={logout}
+      onOpenCatalogSearch={(query = '') => {
+        setCatalogQuery(query);
+        setView('catalog');
+      }}
+      onOpenIngredient={openIngredientRecord}
+      comparisonSeeds={comparisonSeeds}
+      onCompareProducts={(products) => {
+        setComparisonSeeds(products);
+        setView('compare');
+      }}
     />
   );
 }
@@ -720,12 +955,48 @@ function Brand() {
   );
 }
 
-function Landing({
+function GuestShell({
+  children,
+  onHome,
   onLogin,
   onSignup,
 }: {
+  children: ReactNode;
+  onHome: () => void;
   onLogin: () => void;
   onSignup: () => void;
+}) {
+  return (
+    <main className="app-page guest-page">
+      <header className="app-nav">
+        <div className="app-shell">
+          <button onClick={onHome} aria-label="Return to Ingredia home">
+            <Brand />
+          </button>
+          <p className="guest-nav-note">Try the catalog before creating an account.</p>
+          <div className="guest-nav-actions">
+            <button className="nav-text-button" onClick={onLogin}>Log in</button>
+            <Button className="nav-cta" onClick={onSignup}>Create account <ArrowRight /></Button>
+          </div>
+        </div>
+      </header>
+      <div className="app-shell app-content">{children}</div>
+    </main>
+  );
+}
+
+function Landing({
+  onLogin,
+  onSignup,
+  onOpenPreview,
+  showPreview,
+  onOpenCatalog,
+}: {
+  onLogin: () => void;
+  onSignup: () => void;
+  onOpenPreview: () => void;
+  showPreview: boolean;
+  onOpenCatalog: () => void;
 }) {
   return (
     <main className="auth-page landing-page">
@@ -759,6 +1030,11 @@ function Landing({
             <Button className="landing-primary" onClick={onSignup}>
               Analyze a label <ArrowRight />
             </Button>
+            {showPreview && (
+              <Button variant="outline" onClick={onOpenPreview}>
+                Explore preview <ArrowRight />
+              </Button>
+            )}
             <button
               className="landing-secondary"
               onClick={() =>
@@ -897,7 +1173,7 @@ function Landing({
               Every record includes its official package image, UPC, ingredient
               label, and first-party product-page provenance.
             </p>
-            <Button variant="outline" onClick={onSignup}>
+            <Button variant="outline" onClick={() => onOpenCatalog()}>
               Search the catalog <ArrowRight />
             </Button>
           </div>
@@ -1109,14 +1385,17 @@ function Onboarding({
 }) {
   const [step, setStep] = useState(1),
     [focus, setFocus] = useState<string[]>(['Allergens']),
-    [items, setItems] = useState<string[]>([]),
+    [items, setItems] = useState<{ ingredient: string; preferenceType: 'allergen' | 'sensitivity' | 'avoid' }[]>([]),
     [input, setInput] = useState(''),
+    [preferenceType, setPreferenceType] = useState<'allergen' | 'sensitivity' | 'avoid'>('allergen'),
     [saving, setSaving] = useState(false),
     [diet, setDiet] = useState<string[]>([]),
-    [beliefs, setBeliefs] = useState<string[]>([]);
+    [beliefs, setBeliefs] = useState<string[]>([]),
+    [additionalRequirements, setAdditionalRequirements] = useState('');
   function addItem() {
     const value = input.trim();
-    if (value && !items.includes(value)) setItems([...items, value]);
+    if (value && !items.some((item) => item.ingredient.toLocaleLowerCase() === value.toLocaleLowerCase()))
+      setItems([...items, { ingredient: value, preferenceType }]);
     setInput('');
   }
   const toggle = (
@@ -1271,6 +1550,15 @@ function Onboarding({
                   you want surfaced. We’ll match known aliases where possible.
                 </p>
                 <div className="onboarding-input-wrap">
+                  <div className="preference-type-picker onboarding-type-picker" aria-label="What kind of preference is this?">
+                    {([
+                      ['allergen', 'Allergen', 'A diagnosed allergy or strong reaction.'],
+                      ['sensitivity', 'Sensitivity', 'An irritation, intolerance, or ingredient you monitor.'],
+                      ['avoid', 'Avoid', 'A personal ingredient preference.'],
+                    ] as const).map(([value, label, helper]) => (
+                      <button key={value} type="button" onClick={() => setPreferenceType(value)} className={preferenceType === value ? 'active' : ''}><b>{label}</b><small>{helper}</small></button>
+                    ))}
+                  </div>
                   <div className="profile-input">
                     <Search size={17} />
                     <Input
@@ -1295,13 +1583,13 @@ function Onboarding({
                   {items.length ? (
                     items.map((item) => (
                       <button
-                        key={item}
+                        key={item.ingredient}
                         className="chip"
                         onClick={() =>
-                          setItems(items.filter((value) => value !== item))
+                          setItems(items.filter((value) => value.ingredient !== item.ingredient))
                         }
                       >
-                        {item} <X size={13} />
+                        {item.ingredient} · {item.preferenceType} <X size={13} />
                       </button>
                     ))
                   ) : (
@@ -1377,6 +1665,19 @@ function Onboarding({
                     </div>
                   </div>
                 </div>
+                <label className="onboarding-notes" htmlFor="onboarding-additional-notes">
+                  <b>Anything else we should keep in view?</b>
+                  <small>
+                    Add a short note for food safety context, such as a medical
+                    instruction, a cross-contact concern, or a family preference.
+                  </small>
+                  <Textarea
+                    id="onboarding-additional-notes"
+                    value={additionalRequirements}
+                    onChange={(event) => setAdditionalRequirements(event.target.value)}
+                    placeholder="Optional — for example: avoid products with a may-contain peanut warning."
+                  />
+                </label>
                 <div className="onboarding-actions">
                   <Button variant="ghost" onClick={() => setStep(2)}>
                     Back
@@ -1422,9 +1723,10 @@ function Onboarding({
                     onClick={async () => {
                       setSaving(true);
                       await onComplete({
-                        ingredients: items,
+                        preferences: items,
                         dietaryPreferences: diet,
                         culturalConsiderations: beliefs,
+                        additionalRequirements: additionalRequirements.trim() || null,
                       });
                     }}
                   >
@@ -1453,6 +1755,7 @@ function AppShell({
   setDraft,
   analysis,
   catalogProduct,
+  catalogQuery,
   recent,
   selected,
   setSelected,
@@ -1466,7 +1769,12 @@ function AppShell({
   onDeletePreference,
   onSaveProfile,
   onOpenHistory,
+  onCompareHistory,
   onLogout,
+  onOpenCatalogSearch,
+  onOpenIngredient,
+  comparisonSeeds,
+  onCompareProducts,
   userId,
 }: {
   name: string;
@@ -1476,6 +1784,7 @@ function AppShell({
   setDraft: (value: string) => void;
   analysis: Analysis | null;
   catalogProduct: CatalogProduct | null;
+  catalogQuery: string;
   recent: Analysis[];
   selected: Ingredient | null;
   setSelected: (ingredient: Ingredient | null) => void;
@@ -1488,12 +1797,17 @@ function AppShell({
     inputMethod?: 'user_pasted' | 'ocr_confirmed',
   ) => Promise<void>;
   onAnalyzeProduct: (product: CatalogProduct) => Promise<void>;
-  onSavePreference: (ingredient: string) => Promise<void>;
+  onSavePreference: (ingredient: string, preferenceType?: 'allergen' | 'sensitivity' | 'avoid') => Promise<void>;
   onDeletePreference: (ingredientId: string) => Promise<void>;
   onSaveProfile: (profile: UserProfile) => Promise<UserProfile>;
   onOpenHistory: (item: HistoryItem) => Promise<void>;
+  onCompareHistory: (item: HistoryItem) => void;
   onLogout: () => Promise<void>;
+  onOpenCatalogSearch: (query?: string) => void;
+  onOpenIngredient: (ingredientId: string, rawName: string) => Promise<void>;
   userId: string;
+  comparisonSeeds: CatalogProduct[];
+  onCompareProducts: (products: CatalogProduct[]) => void;
 }) {
   const profileMenu = useRef<HTMLDetailsElement>(null);
   const openAccountView = (nextView: 'profile' | 'history') => {
@@ -1511,7 +1825,9 @@ function AppShell({
             {(['analyze', 'compare', 'catalog'] as View[]).map((item) => (
               <button
                 key={item}
-                onClick={() => setView(item)}
+                onClick={() =>
+                  item === 'catalog' ? onOpenCatalogSearch() : setView(item)
+                }
                 className={view === item ? 'selected' : ''}
               >
                 {item}
@@ -1560,18 +1876,23 @@ function AppShell({
             loading={loading}
             error={error}
             onAnalyze={onAnalyze}
-            onOpenCatalog={() => setView('catalog')}
+            onOpenCatalog={onOpenCatalogSearch}
             onSelect={setSelected}
           />
         )}
         {view === 'compare' && (
-          <ComparePage onSelect={setSelected} userId={userId} />
+          <ComparePage onSelect={setSelected} userId={userId} seeds={comparisonSeeds} />
         )}
         {view === 'history' && (
-          <HistoryPage onOpen={onOpenHistory} userId={userId} />
+          <HistoryPage onOpen={onOpenHistory} onCompare={onCompareHistory} onOpenIngredient={onOpenIngredient} userId={userId} />
         )}
         {view === 'catalog' && (
-          <CatalogPage onAnalyzeProduct={onAnalyzeProduct} userId={userId} />
+          <CatalogPage
+            initialQuery={catalogQuery}
+            onAnalyzeProduct={onAnalyzeProduct}
+            userId={userId}
+            onCompareProducts={onCompareProducts}
+          />
         )}
         {view === 'profile' && (
           <ProfilePage
@@ -1619,10 +1940,11 @@ function AnalyzePage({
     text?: string,
     inputMethod?: 'user_pasted' | 'ocr_confirmed',
   ) => Promise<void>;
-  onOpenCatalog: () => void;
+  onOpenCatalog: (query?: string) => void;
   onSelect: (ingredient: Ingredient) => void;
 }) {
   const [mode, setMode] = useState<'ingredients' | 'product'>('ingredients');
+  const [productQuery, setProductQuery] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
   const [ocrMessage, setOcrMessage] = useState<string | null>(null);
   const [ocrError, setOcrError] = useState<string | null>(null);
@@ -1781,19 +2103,31 @@ function AnalyzePage({
             />
           </div>
           <Textarea
-            value={draft}
+            value={mode === 'product' ? productQuery : draft}
             onChange={(event) => {
-              setDraft(event.target.value);
-              setOcrPrepared(false);
+              if (mode === 'product') {
+                setProductQuery(event.target.value);
+              } else {
+                setDraft(event.target.value);
+                setOcrPrepared(false);
+              }
             }}
-            aria-label="Ingredient analysis input"
-            disabled={mode === 'product'}
+            aria-label={
+              mode === 'product'
+                ? 'Product, company, or barcode search'
+                : 'Ingredient analysis input'
+            }
+            placeholder={
+              mode === 'product'
+                ? 'Search a product, company, or barcode'
+                : 'Paste an ingredient list'
+            }
           />
           <Button
             className="send-button"
             onClick={() =>
               mode === 'product'
-                ? onOpenCatalog()
+                ? onOpenCatalog(productQuery)
                 : onAnalyze(
                     undefined,
                     ocrPrepared ? 'ocr_confirmed' : 'user_pasted',
@@ -1802,7 +2136,8 @@ function AnalyzePage({
             disabled={
               loading ||
               !!ocrMessage?.includes('…') ||
-              (mode === 'ingredients' && !draft.trim())
+              (mode === 'ingredients' && !draft.trim()) ||
+              (mode === 'product' && !productQuery.trim())
             }
           >
             {loading ? (
@@ -1816,7 +2151,7 @@ function AnalyzePage({
           <Sparkles size={14} />{' '}
           {mode === 'ingredients'
             ? 'Alias-aware ingredient matching'
-            : 'Search the catalog by product name or company'}
+            : 'Searches Ingredia first, then looks up uncached products in Open Food Facts'}
         </p>
         {ocrMessage && (
           <p className="composer-hint" role="status">
@@ -2043,6 +2378,9 @@ function AnalysisResult({
                   item.canonical_name !== item.raw_token && (
                     <small>{item.raw_token}</small>
                   )}
+                {item.parent_context && (
+                  <small>Declared within {item.parent_context}</small>
+                )}
                 {item.match?.status === 'uncertain' && (
                   <small>Possible match — confirmation required</small>
                 )}
@@ -2127,15 +2465,21 @@ function RecentPanel({ recent }: { recent: Analysis[] }) {
 function ComparePage({
   onSelect,
   userId,
+  seeds,
 }: {
   onSelect: (ingredient: Ingredient) => void;
   userId: string;
+  seeds: CatalogProduct[];
 }) {
   const [a, setA] = useState(''),
     [b, setB] = useState(''),
     [result, setResult] = useState<Comparison | null>(null),
     [loading, setLoading] = useState(false),
     [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (seeds[0]) setA(seeds[0].ingredient_text);
+    if (seeds[1]) setB(seeds[1].ingredient_text);
+  }, [seeds]);
   async function compare() {
     setLoading(true);
     setError(null);
@@ -2176,6 +2520,11 @@ function ComparePage({
         See evidence-backed differences without reducing either product to a
         blanket safe-or-unsafe judgment.
       </p>
+      {seeds.length > 0 && (
+        <p className="composer-hint">
+          <Sparkles size={14} /> Catalog label loaded for {seeds.map((item) => `${item.brand} ${item.name}`).join(' and ')}. Add another label if needed.
+        </p>
+      )}
       <div className="compare-composer">
         <Textarea
           aria-label="Product A ingredients"
@@ -2329,9 +2678,13 @@ function Difference({
 
 function HistoryPage({
   onOpen,
+  onCompare,
+  onOpenIngredient,
   userId,
 }: {
   onOpen: (item: HistoryItem) => Promise<void>;
+  onCompare: (item: HistoryItem) => void;
+  onOpenIngredient: (ingredientId: string, rawName: string) => Promise<void>;
   userId: string;
 }) {
   const [tab, setTab] = useState<'products' | 'ingredients'>('products');
@@ -2452,6 +2805,10 @@ function HistoryPage({
                             : item.product_image_url
                         }
                         alt={`${item.product_name ?? 'Product'} package`}
+                        onError={(event) => recoverProductImage(event, {
+                          name: item.product_name ?? 'Saved product',
+                          brand: item.product_brand ?? item.product_source_name ?? 'Ingredia',
+                        })}
                       />
                     ) : (
                       <Layers3 size={20} />
@@ -2475,6 +2832,12 @@ function HistoryPage({
                     {item.concern_score}
                     <small> /100</small>
                   </strong>
+                </button>
+                <button
+                  className="history-compare"
+                  onClick={() => onCompare(item)}
+                >
+                  Compare
                 </button>
                 <button
                   className="history-delete"
@@ -2508,14 +2871,14 @@ function HistoryPage({
           <p className="encounter-disclaimer">{insights.disclaimer}</p>
           <div className="history-ingredients">
           {insights.ingredients.map((ingredient, index) => (
-            <article key={ingredient.ingredient_id}>
+            <button className="history-ingredient-link" key={ingredient.ingredient_id} onClick={() => void onOpenIngredient(ingredient.ingredient_id, ingredient.canonical_name)}>
               <span>{String(index + 1).padStart(2, '0')}</span>
               <b>{ingredient.canonical_name}</b>
               <p>
                 Appeared in {ingredient.product_encounters} of {insights.total_analyses} analyzed products
               </p>
               <small>{ingredient.products.slice(0, 3).map((product) => product.name).join(' · ')}</small>
-            </article>
+            </button>
           ))}
           </div>
         </div>
@@ -2573,15 +2936,22 @@ function HistoryPage({
 function CatalogPage({
   onAnalyzeProduct,
   userId,
+  guest = false,
+  initialQuery = '',
+  onCompareProducts,
 }: {
   onAnalyzeProduct: (product: CatalogProduct) => Promise<void>;
   userId: string;
+  guest?: boolean;
+  initialQuery?: string;
+  onCompareProducts?: (products: CatalogProduct[]) => void;
 }) {
-  const [query, setQuery] = useState(''),
+  const [query, setQuery] = useState(initialQuery),
     [results, setResults] = useState<CatalogProduct[]>([]),
     [loading, setLoading] = useState(false),
     [error, setError] = useState<string | null>(null),
     [emptyMessage, setEmptyMessage] = useState<string | null>(null),
+    [catalogNotice, setCatalogNotice] = useState<string | null>(null),
     [analyzing, setAnalyzing] = useState<string | null>(null),
     [scanning, setScanning] = useState(false);
   const [reportProduct, setReportProduct] = useState<CatalogProduct | null>(
@@ -2591,6 +2961,9 @@ function CatalogPage({
     [reportDetails, setReportDetails] = useState(''),
     [reporting, setReporting] = useState(false),
     [reportNotice, setReportNotice] = useState<string | null>(null);
+  const [detailProduct, setDetailProduct] = useState<CatalogProduct | null>(null);
+  const [compareSelection, setCompareSelection] = useState<CatalogProduct[]>([]);
+  const [catalogMode, setCatalogMode] = useState<'products' | 'ingredients'>('products');
   const video = useRef<HTMLVideoElement>(null);
   const stream = useRef<MediaStream | null>(null);
   const frame = useRef<number | null>(null);
@@ -2604,11 +2977,16 @@ function CatalogPage({
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
-    void fetch(`${API_BASE}/products?limit=120`, { signal: controller.signal })
+    const trimmed = initialQuery.trim();
+    const endpoint = trimmed
+      ? `${API_BASE}/products?query=${encodeURIComponent(trimmed)}`
+      : `${API_BASE}/products?limit=120`;
+    void fetch(endpoint, { signal: controller.signal })
       .then(async (response) => {
         if (!response.ok) throw new Error();
         const products = (await response.json()) as CatalogProduct[];
         setResults(products);
+        setCatalogNotice(null);
         setEmptyMessage(
           products.length
             ? null
@@ -2617,17 +2995,23 @@ function CatalogPage({
       })
       .catch((cause: unknown) => {
         if (cause instanceof DOMException && cause.name === 'AbortError') return;
+        if (isPublicPreview()) {
+          setResults(PREVIEW_CATALOG);
+          setEmptyMessage(null);
+          return;
+        }
         setError('The product catalog is unavailable right now.');
       })
       .finally(() => {
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, []);
+  }, [initialQuery]);
   async function search(value = query, barcode = false) {
     setLoading(true);
     setError(null);
     setEmptyMessage(null);
+    setCatalogNotice(null);
     try {
       const trimmed = value.trim();
       const parameter = barcode ? 'barcode' : 'query';
@@ -2639,6 +3023,10 @@ function CatalogPage({
       const next = (await response.json()) as CatalogProduct[];
       const resultStatus = response.headers.get('X-Catalog-Result');
       setResults(next);
+      if (next.length && resultStatus === 'external_match')
+        setCatalogNotice('Fresh result added from the public catalog.');
+      else if (next.length && resultStatus === 'local_match')
+        setCatalogNotice('Matched against the stored catalog.');
       if (!next.length)
         setEmptyMessage(
           resultStatus === 'external_unavailable'
@@ -2646,6 +3034,17 @@ function CatalogPage({
             : 'No catalog product matched that search. Try the product name, company, or barcode.',
         );
     } catch {
+      if (isPublicPreview()) {
+        const normalized = value.trim().toLocaleLowerCase();
+        setResults(
+          PREVIEW_CATALOG.filter((item) =>
+            `${item.name} ${item.brand} ${item.barcode}`
+              .toLocaleLowerCase()
+              .includes(normalized),
+          ),
+        );
+        return;
+      }
       setError('The product catalog is unavailable right now.');
       setResults([]);
     } finally {
@@ -2699,12 +3098,23 @@ function CatalogPage({
     }
   }
   async function selectProduct(product: CatalogProduct) {
+    if (!product.ingredients_available) {
+      setError('This product was found, but its ingredient label is unavailable. Open Details to verify the source, then paste the label in Analyze.');
+      return;
+    }
     setAnalyzing(product.id);
     try {
       await onAnalyzeProduct(product);
     } finally {
       setAnalyzing(null);
     }
+  }
+  function toggleComparison(product: CatalogProduct) {
+    setCompareSelection((current) =>
+      current.some((item) => item.id === product.id)
+        ? current.filter((item) => item.id !== product.id)
+        : [...current, product].slice(-2),
+    );
   }
   async function submitReport() {
     if (!reportProduct) return;
@@ -2732,6 +3142,14 @@ function CatalogPage({
       setReporting(false);
     }
   }
+  if (catalogMode === 'ingredients') {
+    return (
+      <IngredientExplorer
+        onBack={() => setCatalogMode('products')}
+        onAnalyzeProduct={onAnalyzeProduct}
+      />
+    );
+  }
   return (
     <section className="secondary-page catalog-page">
       <p className="eyebrow">Product catalog</p>
@@ -2744,6 +3162,9 @@ function CatalogPage({
         Find a catalog label by its product name, company, or barcode, then
         analyze the recorded ingredient list.
       </p>
+      <button className="catalog-explorer-link" onClick={() => setCatalogMode('ingredients')}>
+        <Search size={15} /> Explore ingredient records <ArrowRight size={15} />
+      </button>
       <form
         className="search-field"
         onSubmit={(event) => {
@@ -2755,6 +3176,7 @@ function CatalogPage({
         <Input
           value={query}
           onChange={(event) => setQuery(event.target.value)}
+          placeholder="Try Oreo, Coca-Cola, Nutella, or a barcode"
           aria-label="Search products, companies, or barcodes"
         />
         <Button
@@ -2769,6 +3191,21 @@ function CatalogPage({
           {loading ? 'Searching…' : 'Search'}
         </Button>
       </form>
+      <div className="catalog-examples" aria-label="Catalog search examples">
+        <span>Try an example</span>
+        {['Oreo', 'Coca-Cola', 'Nutella', '7622300336738'].map((example) => (
+          <button
+            type="button"
+            key={example}
+            onClick={() => {
+              setQuery(example);
+              void search(example, /^\d{8,14}$/.test(example));
+            }}
+          >
+            {example}
+          </button>
+        ))}
+      </div>
       {scanning && (
         <div className="barcode-scanner">
           <video ref={video} muted playsInline />
@@ -2785,7 +3222,19 @@ function CatalogPage({
       {!loading && results.length > 0 && (
         <p className="catalog-count" role="status">
           {results.length} stored {results.length === 1 ? 'product' : 'products'}
+          {catalogNotice ? ` · ${catalogNotice}` : ''}
         </p>
+      )}
+      {compareSelection.length > 0 && onCompareProducts && (
+        <div className="catalog-compare-bar">
+          <span>{compareSelection.length}/2 products selected for comparison</span>
+          <Button
+            variant="outline"
+            onClick={() => onCompareProducts(compareSelection)}
+          >
+            Compare selected <ArrowRight />
+          </Button>
+        </div>
       )}
       {reportNotice && (
         <p className="composer-hint" role="status">
@@ -2803,9 +3252,14 @@ function CatalogPage({
             <div className="catalog-product-mark">
               {item.image_url ? (
                 <img
-                  src={catalogImageUrl(item.id)}
+                  src={
+                    isPublicPreview() && item.image_url
+                      ? item.image_url
+                      : catalogImageUrl(item.id)
+                  }
                   alt={`${item.name} package`}
                   loading="lazy"
+                  onError={(event) => recoverProductImage(event, item)}
                 />
               ) : (
                 <Layers3 size={20} />
@@ -2836,21 +3290,31 @@ function CatalogPage({
                     {new Date(item.label_verified_at).toLocaleDateString()}
                   </small>
                 )}
+                {item.description?.startsWith('English translation of') && (
+                  <Badge variant="outline" className="catalog-translation-badge">
+                    Translated to English
+                  </Badge>
+                )}
               </div>
               <small className="catalog-ingredients">
                 {item.ingredient_text}
               </small>
             </div>
             <div className="catalog-card-actions">
-              <Button
-                variant="ghost"
-                onClick={() => {
-                  setReportProduct(item);
-                  setReportNotice(null);
-                }}
-              >
-                Report data
+              <Button variant="ghost" onClick={() => setDetailProduct(item)}>
+                Details
               </Button>
+              {!guest && (
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    setReportProduct(item);
+                    setReportNotice(null);
+                  }}
+                >
+                  Report data
+                </Button>
+              )}
               <Button
                 variant="outline"
                 onClick={() => void selectProduct(item)}
@@ -2862,6 +3326,14 @@ function CatalogPage({
                   'Analyze'
                 )}
               </Button>
+              {!guest && onCompareProducts && (
+                <Button
+                  variant={compareSelection.some((product) => product.id === item.id) ? 'default' : 'ghost'}
+                  onClick={() => toggleComparison(item)}
+                >
+                  {compareSelection.some((product) => product.id === item.id) ? 'Selected' : 'Compare'}
+                </Button>
+              )}
             </div>
           </article>
         ))}
@@ -2905,6 +3377,18 @@ function CatalogPage({
               <NativeSelectOption value="incorrect_ingredients">
                 Incorrect ingredients
               </NativeSelectOption>
+              <NativeSelectOption value="missing_ingredients">
+                Missing ingredients
+              </NativeSelectOption>
+              <NativeSelectOption value="formulation_change">
+                Formula has changed
+              </NativeSelectOption>
+              <NativeSelectOption value="wrong_image">
+                Wrong package image
+              </NativeSelectOption>
+              <NativeSelectOption value="wrong_barcode">
+                Wrong barcode
+              </NativeSelectOption>
               <NativeSelectOption value="wrong_product">
                 Wrong product details
               </NativeSelectOption>
@@ -2936,9 +3420,135 @@ function CatalogPage({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <Dialog open={Boolean(detailProduct)} onOpenChange={(open) => !open && setDetailProduct(null)}>
+        <DialogContent className="product-detail-dialog">
+          {detailProduct && <>
+            <DialogHeader>
+              <DialogTitle>{detailProduct.name}</DialogTitle>
+              <DialogDescription>{detailProduct.brand} · {detailProduct.category?.replace('_', ' ') ?? 'Product'}</DialogDescription>
+            </DialogHeader>
+            <div className="product-detail-content">
+              <img src={isPublicPreview() && detailProduct.image_url ? detailProduct.image_url : catalogImageUrl(detailProduct.id)} alt={`${detailProduct.name} package`} onError={(event) => recoverProductImage(event, detailProduct)} />
+              <div>
+                <p className="eyebrow">Declared ingredient label</p>
+                {detailProduct.description && <p className="product-detail-description">{detailProduct.description}</p>}
+                {detailProduct.description?.startsWith('English translation of') && <Badge variant="outline" className="catalog-translation-badge">Translated to English</Badge>}
+                <p>{detailProduct.ingredient_text || 'Ingredient label is not available for this record.'}</p>
+                <p className="product-detail-meta">Barcode: {detailProduct.barcode ?? 'Not recorded'} · Source: {detailProduct.source_name}</p>
+                {detailProduct.source_url && <a href={detailProduct.source_url} target="_blank" rel="noreferrer" className="catalog-source-link">Open source record <ArrowRight size={13} /></a>}
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => { toggleComparison(detailProduct); setDetailProduct(null); }}>Add to comparison</Button>
+              <Button onClick={() => { setDetailProduct(null); void selectProduct(detailProduct); }}>Analyze this product</Button>
+            </DialogFooter>
+          </>}
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }
+function IngredientExplorer({
+  onBack,
+  onAnalyzeProduct,
+}: {
+  onBack: () => void;
+  onAnalyzeProduct: (product: CatalogProduct) => Promise<void>;
+}) {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<ExplorerIngredient[]>([]);
+  const [selected, setSelected] = useState<ExplorerIngredient | null>(null);
+  const [related, setRelated] = useState<CatalogProduct[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState('Search by a familiar label term, alias, or canonical ingredient name.');
+  async function search() {
+    const term = query.trim();
+    if (!term) return;
+    setLoading(true);
+    setSelected(null);
+    setRelated([]);
+    try {
+      const response = await fetch(`${API_BASE}/ingredients?query=${encodeURIComponent(term)}`);
+      if (!response.ok) throw new Error();
+      const next = (await response.json()) as ExplorerIngredient[];
+      setResults(next);
+      setMessage(next.length ? `${next.length} matching ingredient records.` : 'No canonical record matched that term yet. It can still be analyzed as an unknown label term.');
+    } catch {
+      setResults([]);
+      setMessage('Ingredient records are unavailable right now.');
+    } finally {
+      setLoading(false);
+    }
+  }
+  async function openIngredient(item: ExplorerIngredient) {
+    setSelected(item);
+    setRelated([]);
+    try {
+      const [detailResponse, productResponse] = await Promise.all([
+        fetch(`${API_BASE}/ingredients/${item.id}`),
+        fetch(`${API_BASE}/ingredients/${item.id}/products`),
+      ]);
+      if (detailResponse.ok) setSelected((await detailResponse.json()) as ExplorerIngredient);
+      if (productResponse.ok) setRelated((await productResponse.json()) as CatalogProduct[]);
+    } catch {
+      setMessage('The full ingredient record could not be loaded.');
+    }
+  }
+  return (
+    <section className="secondary-page ingredient-explorer-page">
+      <button className="catalog-explorer-link" onClick={onBack}>← Back to products</button>
+      <p className="eyebrow">Ingredient explorer</p>
+      <h1>Understand one<br /><span>ingredient at a time.</span></h1>
+      <p className="lead">Look up canonical names and label aliases, inspect source records, and find catalog labels where the term appears. A text match is discovery only, not a claim about formulation or dose.</p>
+      <form className="search-field" onSubmit={(event) => { event.preventDefault(); void search(); }}>
+        <Search size={18} />
+        <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Try fragrance, whey, E211, or aqua" aria-label="Search ingredient records" />
+        <Button type="submit" disabled={loading || !query.trim()}>{loading ? 'Searching…' : 'Search records'}</Button>
+      </form>
+      <p className="composer-hint"><Sparkles size={14} /> {message}</p>
+      <div className="ingredient-explorer-layout">
+        <div className="ingredient-result-list">
+          {results.map((item) => (
+            <button key={item.id} className={selected?.id === item.id ? 'active' : ''} onClick={() => void openIngredient(item)}>
+              <span>{item.category?.replaceAll('_', ' ') ?? 'Ingredient'}</span>
+              <b>{item.canonical_name}</b>
+              <small>{item.aliases.slice(0, 3).join(' · ') || 'No aliases recorded'}</small>
+            </button>
+          ))}
+        </div>
+        {selected && (
+          <article className="ingredient-detail-card">
+            <p className="eyebrow">Canonical record</p>
+            <h2>{selected.canonical_name}</h2>
+            <p>{selected.description ?? 'No description is available for this local record.'}</p>
+            <div className="ingredient-aliases"><b>Also listed as</b>{selected.aliases.map((alias) => <Badge key={alias} variant="outline">{alias}</Badge>)}</div>
+            <section>
+              <p className="eyebrow">Evidence context</p>
+              {selected.evidence.length ? selected.evidence.map((record) => (
+                <div className="explorer-evidence" key={record.id}>
+                  <b>{record.concern_type.replaceAll('_', ' ')}</b>
+                  <span>{record.applicability} · {confidence(record.confidence)}</span>
+                  <p>{record.summary}</p>
+                  {record.source_url && <a href={record.source_url} target="_blank" rel="noreferrer">{record.source_name} <ArrowRight size={13} /></a>}
+                </div>
+              )) : <p className="muted-copy">No active source record is configured for this ingredient.</p>}
+            </section>
+            <section>
+              <p className="eyebrow">Catalog appearances</p>
+              {related.length ? related.map((product) => (
+                <div className="related-product" key={product.id}>
+                  <div><b>{product.name}</b><span>{product.brand}</span></div>
+                  <Button size="sm" variant="outline" onClick={() => void onAnalyzeProduct(product)}>Analyze</Button>
+                </div>
+              )) : <p className="muted-copy">No stored product label contains this term or its known aliases.</p>}
+            </section>
+          </article>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function ProfilePage({
   name,
   preferences,
@@ -2952,11 +3562,12 @@ function ProfilePage({
   preferences: Preference[];
   profile: UserProfile | null;
   userId: string;
-  onSave: (ingredient: string) => Promise<void>;
+  onSave: (ingredient: string, preferenceType?: 'allergen' | 'sensitivity' | 'avoid') => Promise<void>;
   onDelete: (ingredientId: string) => Promise<void>;
   onSaveProfile: (profile: UserProfile) => Promise<UserProfile>;
 }) {
   const [input, setInput] = useState('');
+  const [preferenceType, setPreferenceType] = useState<'allergen' | 'sensitivity' | 'avoid'>('avoid');
   const [form, setForm] = useState<UserProfile>({
     user_id: userId,
     display_name: name || null,
@@ -2973,7 +3584,7 @@ function ProfilePage({
   async function add() {
     if (input.trim()) {
       try {
-        await onSave(input.trim());
+        await onSave(input.trim(), preferenceType);
         setInput('');
         setNotice('Ingredient preference saved.');
       } catch {
@@ -3063,6 +3674,17 @@ function ProfilePage({
             Allergens, irritations & avoided ingredients
           </p>
           <h3>What should be highlighted?</h3>
+          <div className="preference-type-picker" aria-label="Preference type">
+            {([
+              ['allergen', 'Allergen', 'A strong personal reaction or diagnosed allergy.'],
+              ['sensitivity', 'Sensitivity', 'An intolerance, irritation, or ingredient you monitor.'],
+              ['avoid', 'Avoid', 'A personal ingredient you prefer not to have.'],
+            ] as const).map(([value, label, helper]) => (
+              <button key={value} type="button" onClick={() => setPreferenceType(value)} className={preferenceType === value ? 'active' : ''}>
+                <b>{label}</b><small>{helper}</small>
+              </button>
+            ))}
+          </div>
           <div className="profile-input">
             <Search size={17} />
             <Input
@@ -3076,19 +3698,17 @@ function ProfilePage({
               Add
             </Button>
           </div>
-          <div className="chip-list">
+          <div className="preference-groups profile-preference-groups">
             {preferences.length ? (
-              preferences.map((item) => (
-                <span className="chip" key={item.ingredient_id}>
-                  {item.canonical_name}
-                  <button
-                    aria-label={`Remove ${item.canonical_name}`}
-                    onClick={() => void remove(item.ingredient_id)}
-                  >
-                    <X size={13} />
-                  </button>
-                </span>
-              ))
+              (['allergen', 'sensitivity', 'avoid'] as const).map((type) => {
+                const items = preferences.filter((item) => item.preference_type === type);
+                return <div key={type}><b>{type === 'avoid' ? 'Avoidances' : `${type[0].toUpperCase()}${type.slice(1)}s`}</b><div className="chip-list">{items.length ? items.map((item) => (
+                  <span className="chip" key={item.ingredient_id}>
+                    {item.canonical_name}
+                    <button aria-label={`Remove ${item.canonical_name}`} onClick={() => void remove(item.ingredient_id)}><X size={13} /></button>
+                  </span>
+                )) : <p className="muted-copy">None saved.</p>}</div></div>;
+              })
             ) : (
               <p className="muted-copy">No saved ingredient matches yet.</p>
             )}
@@ -3193,7 +3813,7 @@ function IngredientDrawer({
 }: {
   ingredient: Ingredient | null;
   onClose: () => void;
-  onSave: (ingredient: string) => Promise<void>;
+  onSave: (ingredient: string, preferenceType?: 'allergen' | 'sensitivity' | 'avoid') => Promise<void>;
 }) {
   return (
     <Sheet
@@ -3239,13 +3859,12 @@ function IngredientDrawer({
                   </section>
                 ))}
                 {ingredient.canonical_name && ingredient.match?.status === 'resolved' && (
-                  <Button
-                    variant="outline"
-                    className="preference-button"
-                    onClick={() => onSave(ingredient.canonical_name!)}
-                  >
-                    <Plus /> Add to sensitivity list
-                  </Button>
+                  <div className="drawer-preference-actions">
+                    <p className="eyebrow">Add to your profile</p>
+                    <Button variant="outline" className="preference-button" onClick={() => onSave(ingredient.canonical_name!, 'allergen')}><Plus /> Allergen</Button>
+                    <Button variant="outline" className="preference-button" onClick={() => onSave(ingredient.canonical_name!, 'sensitivity')}><Plus /> Sensitivity</Button>
+                    <Button variant="outline" className="preference-button" onClick={() => onSave(ingredient.canonical_name!, 'avoid')}><Plus /> Avoid</Button>
+                  </div>
                 )}
                 {ingredient.personal_alert && (
                   <div className="personal-banner compact">
@@ -3293,6 +3912,10 @@ function IngredientDrawer({
                             <div>
                               <dt>Context</dt>
                               <dd>{record.applicability.replace('_', ' ')}</dd>
+                            </div>
+                            <div>
+                              <dt>This product</dt>
+                              <dd>{record.applicability_status.replaceAll('_', ' ')}</dd>
                             </div>
                             {record.evidence_quality && (
                               <div><dt>Evidence quality</dt><dd>{record.evidence_quality.replaceAll('_', ' ')}</dd></div>

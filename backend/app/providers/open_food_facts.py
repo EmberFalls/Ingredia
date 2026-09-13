@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import re
+import asyncio
 
 import httpx
 
 from app.core.config import get_settings
 from app.providers.products import ProviderProduct
+from app.services.translation import CatalogTranslationService
 
 
 class ProductProviderUnavailable(RuntimeError):
@@ -25,6 +27,10 @@ class OpenFoodFactsProvider:
         settings = get_settings()
         self.base_url = settings.open_food_facts_base_url.rstrip("/")
         self.timeout = settings.product_discovery_timeout_seconds
+        self.translator = CatalogTranslationService()
+        self.translation_semaphore = asyncio.Semaphore(
+            max(settings.catalog_translation_concurrency, 1)
+        )
 
     async def search(self, query: str, *, brand: str | None = None, category: str | None = None, country: str | None = None, limit: int = 20) -> list[ProviderProduct]:
         params = {
@@ -33,7 +39,7 @@ class OpenFoodFactsProvider:
             "action": "process",
             "json": 1,
             "page_size": min(max(limit, 1), 20),
-            "fields": "code,product_name,brands,categories,image_front_url,ingredients_text,ingredients_text_en,url,lang",
+            "fields": "code,product_name,product_name_en,brands,categories,categories_en,image_front_url,ingredients_text,ingredients_text_en,url,lang",
         }
         if brand:
             params["tagtype_0"] = "brands"
@@ -49,7 +55,10 @@ class OpenFoodFactsProvider:
         products = payload.get("products")
         if not isinstance(products, list):
             return []
-        return [result for item in products if isinstance(item, dict) if (result := self._normalize(item))]
+        normalized = await asyncio.gather(*(
+            self._normalize(item) for item in products if isinstance(item, dict)
+        ))
+        return [item for item in normalized if item]
 
     async def get_by_barcode(self, barcode: str) -> ProviderProduct | None:
         normalized = re.sub(r"\D", "", barcode)
@@ -57,10 +66,10 @@ class OpenFoodFactsProvider:
             return None
         payload = await self._get_json(
             f"/api/v2/product/{normalized}.json",
-            {"fields": "code,product_name,brands,categories,image_front_url,ingredients_text,ingredients_text_en,url,lang"},
+            {"fields": "code,product_name,product_name_en,brands,categories,categories_en,image_front_url,ingredients_text,ingredients_text_en,url,lang"},
         )
         product = payload.get("product") if payload else None
-        return self._normalize(product) if isinstance(product, dict) else None
+        return await self._normalize(product) if isinstance(product, dict) else None
 
     async def get_product(self, external_id: str) -> ProviderProduct | None:
         return await self.get_by_barcode(external_id)
@@ -81,20 +90,51 @@ class OpenFoodFactsProvider:
         except ValueError:
             return None
 
-    def _normalize(self, item: dict[str, object]) -> ProviderProduct | None:
-        name = self._text(item.get("product_name"))
+    async def _normalize(self, item: dict[str, object]) -> ProviderProduct | None:
+        language = self._text(item.get("lang"))
+        english_name = self._text(item.get("product_name_en"))
+        source_is_english = bool(language and language.casefold().startswith("en"))
+        original_name = self._text(item.get("product_name"))
+        name = english_name or (original_name if source_is_english else None)
         barcode = self._text(item.get("code"))
-        if not name or not barcode:
+        if not barcode:
             return None
-        ingredients = self._text(item.get("ingredients_text_en")) or self._text(item.get("ingredients_text"))
+        # Only use provider fields which are explicitly English, or an entire
+        # record explicitly marked English. This avoids silently putting
+        # untranslated product, category, or ingredient copy into the UI.
+        description = None
+        if not name and original_name:
+            # A broad catalog search can contain several non-English records.
+            # Keep its optional presentation translations bounded so the
+            # product lookup itself remains responsive and respectful of the
+            # public translation endpoint.
+            async with self.translation_semaphore:
+                translated_name = await self.translator.to_english(
+                    original_name, language
+                )
+            if not translated_name:
+                return None
+            name = translated_name
+            description = (
+                f"English translation of the provider’s {language or 'non-English'} product title. "
+                f"Original catalog title: {original_name}."
+            )
+        if not name:
+            return None
+        ingredients = self._text(item.get("ingredients_text_en")) or (
+            self._text(item.get("ingredients_text")) if source_is_english else None
+        )
         image = self._text(item.get("image_front_url"))
         url = self._text(item.get("url")) or f"{self.base_url}/product/{barcode}"
         return ProviderProduct(
             external_id=barcode, provider=self.name, name=name, brand=self._text(item.get("brands")),
-            category=self._text(item.get("categories")), barcode=barcode, image_url=image,
-            product_url=url, ingredient_text=ingredients, language=self._text(item.get("lang")),
+            category=self._text(item.get("categories_en")) or (
+                self._text(item.get("categories")) if source_is_english else None
+            ), barcode=barcode, image_url=image,
+            product_url=url, ingredient_text=ingredients, description=description,
+            language="en" if english_name or description else language,
             source_confidence=0.8 if ingredients else 0.45,
-            raw_payload={"barcode": barcode, "language": self._text(item.get("lang"))},
+            raw_payload={"barcode": barcode, "language": language, "english_name": english_name},
         )
 
     @staticmethod

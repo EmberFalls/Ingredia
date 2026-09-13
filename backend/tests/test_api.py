@@ -145,6 +145,30 @@ def test_profile_and_catalog_analysis_history_are_persisted() -> None:
     assert history.json()[0]["product_name"] == product["name"]
     assert history.json()[0]["product_brand"] == product["brand"]
     assert history.json()[0]["product_source_type"] == "official_brand"
+    assert history.json()[0]["analysis_snapshot"]["summary"]["parsed_ingredients"] > 0
+    assert history.json()[0]["scoring_version"]
+
+
+def test_ingredient_explorer_detail_and_related_products() -> None:
+    with TestClient(app) as client:
+        found = client.get("/api/v1/ingredients", params={"query": "fragrance"})
+        assert found.status_code == 200
+        ingredient = found.json()[0]
+        detail = client.get(f"/api/v1/ingredients/{ingredient['id']}")
+        related = client.get(f"/api/v1/ingredients/{ingredient['id']}/products")
+    assert detail.status_code == 200
+    assert detail.json()["aliases"]
+    assert related.status_code == 200
+
+
+def test_catalog_reports_support_label_and_package_corrections() -> None:
+    with TestClient(app) as client:
+        product = client.get("/api/v1/products", params={"limit": 1}).json()[0]
+        response = client.post(f"/api/v1/products/{product['id']}/reports", json={
+            "reason": "wrong_image", "details": "Package photo is from an older variant.",
+        })
+    assert response.status_code == 201
+    assert response.json()["reason"] == "wrong_image"
 
 
 def test_major_food_allergen_alias_matches_without_inflating_general_score() -> None:

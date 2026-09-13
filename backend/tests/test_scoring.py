@@ -22,3 +22,11 @@ def test_score_is_bounded_and_categorized() -> None:
     result = service.score_product([("Example", [Evidence("a", 10, 1), Evidence("b", 10, 1)])], None)
     assert result.score == 100
     assert score_band(result.score) == "elevated"
+
+
+def test_applicability_distinguishes_exact_family_and_unrelated_context() -> None:
+    service = ScoringService()
+    food_record = Evidence("labeling", 1, 1, "food")
+    assert service.applicability_status(food_record, "packaged_food") == "likely"
+    assert service.applicability_status(food_record, "personal_care") == "not_applicable"
+    assert service.applicability_status(food_record, None) == "background"

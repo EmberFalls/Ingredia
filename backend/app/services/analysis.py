@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from uuid import uuid4
+import json
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -33,7 +34,8 @@ class AnalysisService:
 
     def analyze(self, request: AnalyzeTextRequest) -> AnalyzeTextResponse:
         analysis_id = str(uuid4())
-        tokens = self.parser.parse(request.ingredient_text)
+        parsed_tokens = self.parser.parse_with_context(request.ingredient_text)
+        tokens = [item.text for item in parsed_tokens]
         normalized = [self.normalizer.normalize(token) for token in tokens]
         user_preferences = self._preferences(request.user_id)
         personal_context = PersonalContextService(self.db, request.user_id)
@@ -45,7 +47,7 @@ class AnalysisService:
         scored_ingredient_ids: set[str] = set()
         high_confidence_flags = 0
         alerts = 0
-        for position, (token, resolved) in enumerate(zip(tokens, normalized)):
+        for position, (token, resolved, parsed) in enumerate(zip(tokens, normalized, parsed_tokens)):
             match = MatchOut(
                 method=resolved.method,
                 confidence=resolved.confidence,
@@ -55,12 +57,12 @@ class AnalysisService:
             )
             if resolved.status == "unknown" or not resolved.ingredient:
                 unknowns.append(token)
-                output.append(IngredientAnalysisOut(position=position, raw_token=token, canonical_name=None, match=match, concern_score=0, evidence=[], personal_alert=None))
+                output.append(IngredientAnalysisOut(position=position, raw_token=token, parent_context=parsed.parent_context, canonical_name=None, match=match, concern_score=0, evidence=[], personal_alert=None))
                 continue
             if resolved.status == "uncertain":
                 uncertain_count += 1
                 output.append(IngredientAnalysisOut(
-                    position=position, raw_token=token, ingredient_id=resolved.ingredient.id,
+                    position=position, raw_token=token, parent_context=parsed.parent_context, ingredient_id=resolved.ingredient.id,
                     canonical_name=resolved.ingredient.canonical_name, match=match, concern_score=0,
                     evidence=[], personal_alert=None, families=[], product_contribution=0,
                 ))
@@ -91,11 +93,12 @@ class AnalysisService:
             output.append(IngredientAnalysisOut(
                 position=position,
                 raw_token=token,
+                parent_context=parsed.parent_context,
                 ingredient_id=ingredient.id,
                 canonical_name=ingredient.canonical_name,
                 match=match,
                 concern_score=ingredient_score,
-                evidence=[self._evidence_out(record) for record in evidence],
+                evidence=[self._evidence_out(record, request.product_category) for record in evidence],
                 personal_alert=personal_alert,
                 families=self._families_out(ingredient),
             ))
@@ -138,6 +141,9 @@ class AnalysisService:
                 product_image_url=request.product_image_url, product_source_name=request.product_source_name,
                 product_source_type=request.product_source_type, raw_text=request.ingredient_text,
                 concern_score=product_score.score, coverage=coverage,
+                analysis_snapshot=json.dumps(response.model_dump(mode="json")),
+                scoring_version=get_settings().scoring_version,
+                evidence_version=get_settings().evidence_version,
             )
             self.db.add(history)
             self.db.flush()
@@ -156,12 +162,13 @@ class AnalysisService:
         return {row.ingredient_id: row.preference_type for row in rows}
 
     @staticmethod
-    def _evidence_out(record: object) -> EvidenceOut:
+    def _evidence_out(record: object, product_category: str | None = None) -> EvidenceOut:
         return EvidenceOut(
             id=record.id,
             concern_type=record.concern_type, severity=record.severity, confidence=record.confidence,
             source_name=record.source_name, source_url=record.source_url, summary=record.summary,
             applicability=record.applicability, limitations=record.limitations,
+            applicability_status=ScoringService.applicability_status(record, product_category),
             source_type=record.source_type, evidence_quality=record.evidence_quality,
             jurisdiction=record.jurisdiction, exposure_route=record.exposure_route,
             restriction_condition=record.restriction_condition,

@@ -3451,6 +3451,26 @@ textarea:focus-visible {
   color: #145d4e;
   background: #e3f5ed;
 }
+.onboarding-notes {
+  display: grid;
+  gap: 0.38rem;
+  margin-top: 1rem;
+  color: #254b42;
+}
+.onboarding-notes b {
+  font-size: 0.84rem;
+}
+.onboarding-notes small {
+  color: #70857d;
+  font-size: 0.73rem;
+  line-height: 1.45;
+}
+.onboarding-notes textarea {
+  min-height: 5.5rem;
+  resize: vertical;
+  border-color: #d2e4dd;
+  background: #fbfefd;
+}
 .onboarding-summary {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

@@ -17,6 +17,7 @@ class ProviderProduct(BaseModel):
     image_url: HttpUrl | None = None
     product_url: HttpUrl | None = None
     ingredient_text: str | None = None
+    description: str | None = None
     country: str | None = None
     language: str | None = None
     source_confidence: float

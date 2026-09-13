@@ -17,15 +17,23 @@ class ProductImportService:
 
     def upsert(self, item: ProviderProduct) -> Product:
         barcode = item.barcode or item.external_id
-        statement = select(Product)
+        product: Product | None = None
         if barcode:
-            statement = statement.where(Product.barcode == barcode)
-        else:
-            statement = statement.where(
-                func.lower(Product.name) == item.name.casefold(),
-                func.lower(Product.brand) == (item.brand or "Unknown brand").casefold(),
+            product = self.db.scalar(
+                select(Product).where(Product.barcode == barcode),
             )
-        product = self.db.scalar(statement)
+        # The catalogue enforces a name-and-brand uniqueness rule. A provider
+        # can legitimately return package variants with distinct barcodes but
+        # the same display name, so reconcile that variant to the existing
+        # record instead of failing the whole external search with IntegrityError.
+        if not product:
+            product = self.db.scalar(
+                select(Product).where(
+                    func.lower(Product.name) == item.name.casefold(),
+                    func.lower(Product.brand)
+                    == (item.brand or "Unknown brand").casefold(),
+                ),
+            )
         if not product:
             product = Product(name=item.name, brand=item.brand or "Unknown brand", ingredient_text="")
             self.db.add(product)
@@ -34,6 +42,7 @@ class ProductImportService:
         product.category = item.category
         product.barcode = barcode
         product.ingredient_text = item.ingredient_text or ""
+        product.description = item.description
         product.image_url = str(item.image_url) if item.image_url else None
         product.source_type = "public_catalog"
         product.source_name = item.provider

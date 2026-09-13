@@ -116,6 +116,26 @@ def ingredient_detail(ingredient_id: str, db: Session = Depends(get_db)) -> Ingr
     return _ingredient_out(item)
 
 
+@router.get("/ingredients/{ingredient_id}/products", response_model=list[ProductOut])
+def ingredient_products(ingredient_id: str, limit: int = 12, db: Session = Depends(get_db)) -> list[ProductOut]:
+    """Catalog products whose declared label contains this canonical term or alias.
+
+    This is discovery, not a formulation claim: the detail page labels it as a
+    text-label match and sends users to the individual product record.
+    """
+    ingredient = db.scalar(select(Ingredient).options(selectinload(Ingredient.aliases)).where(Ingredient.id == ingredient_id))
+    if not ingredient:
+        raise HTTPException(status_code=404, detail="Ingredient not found")
+    terms = [ingredient.canonical_name, *(alias.alias for alias in ingredient.aliases)]
+    conditions = [Product.ingredient_text.ilike(f"%{term}%") for term in terms if term.strip()]
+    if not conditions:
+        return []
+    products = db.scalars(
+        select(Product).where(or_(*conditions)).order_by(Product.name).limit(min(max(limit, 1), 50))
+    ).all()
+    return [_product_out(product) for product in products]
+
+
 @router.get("/products", response_model=list[ProductOut])
 async def search_products(
     response: Response,
@@ -174,6 +194,7 @@ def product_image(product_id: str, db: Session = Depends(get_db)) -> Response:
     trusted_product_image_hosts = {
         "images.salsify.com",
         "images.openfoodfacts.net",
+        "images.openfoodfacts.org",
     }
     if parsed.scheme == "https" and parsed.hostname in trusted_product_image_hosts:
         try:
@@ -430,6 +451,7 @@ def _ingredient_out(item: Ingredient) -> IngredientOut:
             "concern_type": record.concern_type, "severity": record.severity, "confidence": record.confidence,
             "source_name": record.source_name, "source_url": record.source_url, "summary": record.summary,
             "applicability": record.applicability, "limitations": record.limitations,
+            "applicability_status": "background",
             "source_type": record.source_type, "evidence_quality": record.evidence_quality,
             "jurisdiction": record.jurisdiction, "exposure_route": record.exposure_route,
             "restriction_condition": record.restriction_condition,
@@ -493,11 +515,17 @@ def _profile_out(item: UserProfile | None, user_id: str) -> UserProfileOut:
 
 
 def _history_out(item: ScanHistory) -> HistoryItemOut:
+    try:
+        snapshot = json.loads(item.analysis_snapshot) if item.analysis_snapshot else None
+    except (TypeError, json.JSONDecodeError):
+        snapshot = None
     return HistoryItemOut(
         id=item.id, product_id=item.product_id, product_name=item.product_name, product_brand=item.product_brand,
         product_category=item.product_category, product_image_url=item.product_image_url,
         product_source_name=item.product_source_name, product_source_type=item.product_source_type,
-        raw_text=item.raw_text, concern_score=item.concern_score, coverage=item.coverage, created_at=item.created_at,
+        raw_text=item.raw_text, concern_score=item.concern_score, coverage=item.coverage,
+        analysis_snapshot=snapshot, scoring_version=item.scoring_version, evidence_version=item.evidence_version,
+        created_at=item.created_at,
     )
 
 

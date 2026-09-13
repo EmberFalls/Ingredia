@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     product_discovery_external_enabled: bool = True
     product_discovery_timeout_seconds: float = 4.0
     open_food_facts_base_url: str = "https://world.openfoodfacts.org"
+    catalog_translation_enabled: bool = True
+    catalog_translation_base_url: str = "https://api.mymemory.translated.net/get"
+    catalog_translation_timeout_seconds: float = 3.0
+    catalog_translation_concurrency: int = 4
     rate_limit_requests_per_minute: int = 120
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

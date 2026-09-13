@@ -152,6 +152,12 @@ class ScanHistory(Base):
     raw_text: Mapped[str] = mapped_column(Text)
     concern_score: Mapped[int] = mapped_column(Integer)
     coverage: Mapped[float] = mapped_column(Float)
+    # The analysis is saved as an immutable, user-visible receipt. Reopening
+    # history must not silently re-score a label when the evidence catalog
+    # changes later.
+    analysis_snapshot: Mapped[str | None] = mapped_column(Text, nullable=True)
+    scoring_version: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    evidence_version: Mapped[str | None] = mapped_column(String(80), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     encounters: Mapped[list[IngredientEncounter]] = relationship(back_populates="history", cascade="all, delete-orphan")
 

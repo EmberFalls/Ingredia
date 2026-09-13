@@ -47,6 +47,9 @@ SCAN_HISTORY_COLUMNS = {
     "product_image_url": "VARCHAR(500)",
     "product_source_name": "VARCHAR(160)",
     "product_source_type": "VARCHAR(40)",
+    "analysis_snapshot": "TEXT",
+    "scoring_version": "VARCHAR(80)",
+    "evidence_version": "VARCHAR(80)",
 }
 
 

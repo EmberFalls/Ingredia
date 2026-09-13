@@ -18,6 +18,7 @@ class EvidenceOut(BaseModel):
     retrieved_at: datetime | None = None
     summary: str
     applicability: str
+    applicability_status: str = "background"
     limitations: str | None
 
 
@@ -77,6 +78,7 @@ class PersonalAlertOut(BaseModel):
 class IngredientAnalysisOut(BaseModel):
     position: int
     raw_token: str
+    parent_context: str | None = None
     canonical_name: str | None
     ingredient_id: str | None = None
     match: MatchOut | None
@@ -145,7 +147,7 @@ class ProductAnalysisRequest(BaseModel):
 
 class CatalogReportRequest(BaseModel):
     user_id: str | None = Field(default=None, max_length=100)
-    reason: str = Field(pattern="^(incorrect_ingredients|outdated_label|wrong_product|duplicate|other)$")
+    reason: str = Field(pattern="^(incorrect_ingredients|missing_ingredients|outdated_label|formulation_change|wrong_product|wrong_image|wrong_barcode|duplicate|other)$")
     details: str | None = Field(default=None, max_length=2_000)
 
 
@@ -215,6 +217,9 @@ class HistoryItemOut(BaseModel):
     raw_text: str
     concern_score: int
     coverage: float
+    analysis_snapshot: dict[str, object] | None = None
+    scoring_version: str | None = None
+    evidence_version: str | None = None
     created_at: datetime | None
 
 
