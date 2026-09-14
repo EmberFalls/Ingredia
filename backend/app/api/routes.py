@@ -142,12 +142,13 @@ async def search_products(
     query: str | None = None,
     brand: str | None = None,
     category: str | None = None,
+    market: str | None = None,
     barcode: str | None = None,
     limit: int = 20,
     db: Session = Depends(get_db),
 ) -> list[ProductOut]:
     """Search the internal catalog by product, brand, category, or barcode."""
-    products, catalog_status = await ProductDiscoveryService(db).search(query=query, brand=brand, category=category, barcode=barcode, limit=min(max(limit, 1), 120))
+    products, catalog_status = await ProductDiscoveryService(db).search(query=query, brand=brand, category=category, market=market, barcode=barcode, limit=min(max(limit, 1), 120))
     response.headers["X-Catalog-Result"] = catalog_status
     return [_product_out(product) for product in products]
 
@@ -470,7 +471,10 @@ def _ingredient_out(item: Ingredient) -> IngredientOut:
 def _product_out(item: Product) -> ProductOut:
     return ProductOut(
         id=item.id, name=item.name, brand=item.brand, category=item.category,
-        barcode=item.barcode, ingredient_text=item.ingredient_text, image_url=item.image_url, description=item.description,
+        catalog_market=item.catalog_market,
+        barcode=item.barcode, ingredient_text=item.ingredient_text, image_url=item.image_url,
+        image_verification_status=item.image_verification_status,
+        image_verified_at=item.image_verified_at, description=item.description,
         source_type=item.source_type, source_name=item.source_name, source_url=item.source_url,
         source_confidence=item.source_confidence, label_verified_at=item.label_verified_at,
         source_retrieved_at=item.source_retrieved_at, is_demo=item.is_demo,
@@ -480,7 +484,7 @@ def _product_out(item: Product) -> ProductOut:
 
 def _catalog_image_fallback(product: Product) -> str:
     """A local labelled image used only when a source package photo is unavailable."""
-    brand = escape(product.brand or "IngredientIQ")
+    brand = escape(product.brand or "Ingredia")
     name = escape(product.name or "Catalog product")
     category = escape((product.category or "product").replace("_", " ").title())
     return (

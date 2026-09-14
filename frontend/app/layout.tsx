@@ -14,8 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'Ingredient Intelligence',
-  description: 'Evidence-led ingredient list analysis.',
+  title: 'Ingredia',
+  description: 'Evidence-led ingredient and product analysis.',
 };
 
 export default function RootLayout({

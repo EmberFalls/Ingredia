@@ -16,10 +16,16 @@ SEED_INGREDIENTS = [
     {"name": "Niacinamide", "category": "skin conditioning", "description": "A form of vitamin B3 used in cosmetic formulations.", "aliases": ["Niacinamide", "Nicotinamide"], "evidence": []},
     {"name": "Fragrance", "category": "fragrance", "description": "A fragrance mixture or fragrance-designating label term.", "aliases": ["Fragrance", "Parfum", "Fragrance (Parfum)", "Perfume"], "evidence": [{"concern_type": "sensitization_context", "severity": 2, "confidence": 0.8, "source_name": "European Chemicals Agency", "source_url": "https://echa.europa.eu/en/hot-topics/skin-sensitising-chemicals", "source_type": "regulatory_authority", "evidence_quality": "regulatory_context", "jurisdiction": "European Union", "exposure_route": "dermal", "summary": "Fragrance-designating terms may conceal individual fragrance substances that are relevant to sensitized users.", "applicability": "personal_care", "limitations": "The umbrella label does not identify the individual fragrance substances or their concentrations."}]},
     {"name": "Phenoxyethanol", "category": "preservative", "description": "Common cosmetic preservative.", "aliases": ["Phenoxyethanol", "Phenoxethanol"], "evidence": [{"concern_type": "regulated_concentration", "severity": 2, "confidence": 0.98, "source_name": "European Commission Scientific Committee on Consumer Safety", "source_url": "https://health.ec.europa.eu/publications/phenoxyethanol_en", "source_type": "expert_regulatory_opinion", "evidence_quality": "high", "jurisdiction": "European Union", "exposure_route": "cosmetic_use", "restriction_condition": "Authorized as a preservative up to 1.0% in ready-for-use cosmetic preparations.", "summary": "The SCCS concluded that phenoxyethanol is safe as a cosmetic preservative at a maximum concentration of 1.0%.", "applicability": "personal_care", "limitations": "Ingredient-list presence does not reveal concentration, so compliance or risk cannot be inferred from presence alone."}]},
-    {"name": "Limonene", "category": "fragrance", "description": "Fragrance ingredient found in citrus oils and fragrance compositions.", "aliases": ["Limonene", "d-Limonene"], "evidence": [{"concern_type": "sensitization", "severity": 3, "confidence": 0.95, "source_name": "European Chemicals Agency", "source_url": "https://echa.europa.eu/substance-information/-/substanceinfo/100.025.284", "source_type": "regulatory_substance_database", "evidence_quality": "high", "jurisdiction": "European Union", "exposure_route": "dermal", "summary": "D-limonene is listed in European regulatory substance information and cosmetic restriction context relevant to fragrance sensitization.", "applicability": "personal_care", "limitations": "Product relevance depends on concentration, formulation, oxidation state, route, and individual sensitivity."}]},
+    {"name": "Limonene", "category": "fragrance", "description": "Fragrance ingredient found in citrus oils and fragrance compositions.", "aliases": ["Limonene", "d-Limonene"], "evidence": [
+        {"concern_type": "sensitization", "severity": 3, "confidence": 0.95, "source_name": "European Chemicals Agency", "source_url": "https://echa.europa.eu/substance-information/-/substanceinfo/100.025.284", "source_type": "regulatory_substance_database", "evidence_quality": "high", "jurisdiction": "European Union", "exposure_route": "dermal", "summary": "D-limonene is listed in European regulatory substance information and cosmetic restriction context relevant to fragrance sensitization.", "applicability": "personal_care", "limitations": "Product relevance depends on concentration, formulation, oxidation state, route, and individual sensitivity."},
+        {"concern_type": "cosmetic_allergen_labelling", "severity": 0, "confidence": 0.99, "source_name": "European Commission", "source_url": "https://single-market-economy.ec.europa.eu/sectors/cosmetics/cosmetic-products-specific-topics/fragrance-allergens-labelling_en", "source_type": "regulatory_authority", "evidence_quality": "high", "jurisdiction": "European Union", "exposure_route": "dermal", "summary": "EU cosmetic rules require individually listed fragrance allergens, including limonene, to be declared when they exceed the applicable leave-on or rinse-off concentration threshold.", "applicability": "personal_care", "limitations": "A label listing establishes presence, not concentration, product compliance, exposure, or an individual health outcome."}
+    ]},
     {"name": "Sodium Benzoate", "category": "preservative", "description": "Common preservative used in food and personal care.", "aliases": ["Sodium Benzoate", "E211", "INS 211"], "evidence": []},
     {"name": "Lecithin", "category": "emulsifier", "description": "Emulsifier commonly used in food and cosmetics.", "aliases": ["Lecithin", "INS 322", "E322"], "evidence": []},
-    {"name": "Tartrazine", "category": "colorant", "description": "Synthetic yellow colorant.", "aliases": ["Tartrazine", "CI 19140", "E102", "INS 102"], "evidence": [{"concern_type": "labeling", "severity": 2, "confidence": 0.75, "source_name": "Demo curated evidence", "summary": "Colorant use and labeling can vary by product category and jurisdiction.", "applicability": "all", "limitations": "This record is informational and is not a statement of individual risk."}]},
+    # Retain the canonical name and aliases for label interpretation, but do
+    # not attach an unsourced demo claim. Evidence shown to users must carry a
+    # traceable source URL and its own applicability and limitations.
+    {"name": "Tartrazine", "category": "colorant", "description": "Synthetic yellow colorant.", "aliases": ["Tartrazine", "CI 19140", "E102", "INS 102"], "evidence": []},
     {"name": "Milk", "category": "major food allergen", "description": "Milk and ingredients containing milk protein.", "aliases": ["Milk", "Dairy", "Casein", "Caseinate", "Whey", "Whey Powder", "Lactalbumin", "Lactose", "Milk Powder", "Skimmed Milk Powder", "Milk Protein", "Cream", "Butter", "Cheese"], "evidence": [{"concern_type": "allergen_labeling", "severity": 0, "confidence": 0.95, "source_name": "U.S. Food and Drug Administration", "source_url": "https://www.fda.gov/industry/fda-basics-industry/what-major-food-allergen", "summary": "Milk is identified as a major food allergen under U.S. labeling requirements.", "applicability": "food", "limitations": "Label presence does not predict whether or how severely a particular person will react."}]},
     {"name": "Egg", "category": "major food allergen", "description": "Egg and ingredients containing egg protein.", "aliases": ["Egg", "Eggs", "Egg White", "Egg Whites", "Albumen", "Ovalbumin"], "evidence": [{"concern_type": "allergen_labeling", "severity": 0, "confidence": 0.95, "source_name": "U.S. Food and Drug Administration", "source_url": "https://www.fda.gov/industry/fda-basics-industry/what-major-food-allergen", "summary": "Egg is identified as a major food allergen under U.S. labeling requirements.", "applicability": "food", "limitations": "Label presence does not predict whether or how severely a particular person will react."}]},
     {"name": "Peanut", "category": "major food allergen", "description": "Peanuts and ingredients containing peanut protein.", "aliases": ["Peanut", "Peanuts", "Groundnut", "Groundnuts", "Arachis oil"], "evidence": [{"concern_type": "allergen_labeling", "severity": 0, "confidence": 0.95, "source_name": "U.S. Food and Drug Administration", "source_url": "https://www.fda.gov/industry/fda-basics-industry/what-major-food-allergen", "summary": "Peanut is identified as a major food allergen under U.S. labeling requirements.", "applicability": "food", "limitations": "Highly refined oils and regional labeling rules require additional context."}]},
@@ -308,6 +314,11 @@ def _load_real_catalog() -> list[dict[str, object]]:
     required = {"name", "brand", "barcode", "ingredient_text", "image_url", "source_url"}
     if any(not isinstance(item, dict) or not required.issubset(item) for item in records):
         raise RuntimeError("The real product catalog contains an incomplete product record.")
+    for record in records:
+        # These records were manually collected from the brand's own product
+        # pages. Keep that distinction explicit in the API and UI instead of
+        # treating every remote image as equally trustworthy.
+        record.setdefault("image_verification_status", "first_party_record")
     return records
 
 
@@ -335,6 +346,12 @@ def seed_database(db: Session) -> None:
         else:
             ingredient.normalized_name = normalize_key(item["name"])
             ingredient.is_active = True
+        # Earlier development builds contained one clearly labelled but
+        # unsourced demo evidence record. Remove it during reseeding so an
+        # upgraded local database never exposes unsupported claims.
+        for record in list(ingredient.evidence_records):
+            if record.source_name == "Demo curated evidence":
+                db.delete(record)
         for record_data in item["evidence"]:
             record = next((row for row in ingredient.evidence_records if row.concern_type == record_data["concern_type"]), None)
             if not record:
@@ -375,7 +392,7 @@ def seed_database(db: Session) -> None:
                     setattr(membership, field, value)
     # Replace earlier demo and community-photo seed records on upgrade. Saved
     # analyses retain their denormalized product text and provenance.
-    retired_sources = ("demo", "open_food_facts", "public_catalog")
+    retired_sources = ("demo", "open_food_facts")
     for product in db.scalars(
         select(Product).where(
             (Product.is_demo.is_(True)) | (Product.source_type.in_(retired_sources))

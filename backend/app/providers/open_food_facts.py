@@ -74,10 +74,58 @@ class OpenFoodFactsProvider:
     async def get_product(self, external_id: str) -> ProviderProduct | None:
         return await self.get_by_barcode(external_id)
 
+    async def popular_in_india(self, limit: int = 100) -> list[ProviderProduct]:
+        """Return image-backed, analyzable popular products tagged for India.
+
+        This is intentionally a public-catalog import, not a claim that the
+        manufacturer has independently verified every imported record.
+        """
+        target = min(max(limit, 1), 120)
+        # The current structured search API is served from the `.net` host.
+        # Keep the existing legacy search host untouched for compatibility,
+        # but use the documented v2 endpoint for this country-filtered import.
+        results: list[ProviderProduct] = []
+        seen: set[str] = set()
+        # Some high-popularity records lack either a usable front image or a
+        # declared ingredient list. Continue through a few pages so the local
+        # set reaches the requested size without accepting incomplete records.
+        for page in range(1, 6):
+            payload = await self._get_json_from_base(
+                "https://world.openfoodfacts.net",
+                "/api/v2/search",
+                {
+                    "countries_tags_en": "india",
+                    "sort_by": "popularity_key",
+                    "page": page,
+                    "page_size": target,
+                    "fields": "code,product_name,product_name_en,brands,categories,categories_en,image_front_url,ingredients_text,ingredients_text_en,url,lang",
+                },
+            )
+            products = payload.get("products") if payload else None
+            if not isinstance(products, list) or not products:
+                break
+            normalized = await asyncio.gather(*(
+                self._normalize(item) for item in products if isinstance(item, dict)
+            ))
+            for item in normalized:
+                if not item or not item.barcode or not item.image_url or not item.ingredient_text:
+                    continue
+                if item.barcode in seen:
+                    continue
+                seen.add(item.barcode)
+                item.country = "India"
+                results.append(item)
+                if len(results) == target:
+                    return results
+        return results
+
     async def _get_json(self, path: str, params: dict[str, object]) -> dict[str, object] | None:
+        return await self._get_json_from_base(self.base_url, path, params)
+
+    async def _get_json_from_base(self, base_url: str, path: str, params: dict[str, object]) -> dict[str, object] | None:
         try:
             async with httpx.AsyncClient(timeout=self.timeout, headers={"User-Agent": "IngredientIntelligence/0.1 (catalog lookup)"}) as client:
-                response = await client.get(f"{self.base_url}{path}", params=params)
+                response = await client.get(f"{base_url.rstrip('/')}{path}", params=params)
                 response.raise_for_status()
                 payload = response.json()
                 return payload if isinstance(payload, dict) else None

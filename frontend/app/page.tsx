@@ -59,6 +59,19 @@ import {
 
 const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://127.0.0.1:8000/api/v1';
+const SESSION_KEY = 'ingredia_session';
+const LEGACY_SESSION_KEY = 'ingredientiq_session';
+const storedSession = () => {
+  if (typeof window === 'undefined') return null;
+  const current = localStorage.getItem(SESSION_KEY);
+  if (current) return current;
+  const legacy = localStorage.getItem(LEGACY_SESSION_KEY);
+  if (legacy) {
+    localStorage.setItem(SESSION_KEY, legacy);
+    localStorage.removeItem(LEGACY_SESSION_KEY);
+  }
+  return legacy;
+};
 const isPublicPreview = () =>
   typeof window !== 'undefined' &&
   window.location.hostname.endsWith('.chatgpt.site');
@@ -92,12 +105,18 @@ const recoverProductImage = (
   event.currentTarget.onerror = null;
   event.currentTarget.src = productImageFallback(product);
 };
+const imageVerificationLabel = (product: Pick<CatalogProduct, 'image_url' | 'image_verification_status'>) => {
+  if (!product.image_url || product.image_verification_status === 'unavailable') return 'No verified package image';
+  if (product.image_verification_status === 'first_party_record') return 'First-party package image';
+  if (product.image_verification_status === 'provider_barcode_match') return 'Barcode-matched catalog image';
+  return 'Image source needs review';
+};
 function accountHeaders(json = false): Record<string, string> {
   const headers: Record<string, string> = json
     ? { 'Content-Type': 'application/json' }
     : {};
   if (typeof window !== 'undefined') {
-    const token = localStorage.getItem('ingredientiq_session');
+    const token = storedSession();
     if (token) headers.Authorization = `Bearer ${token}`;
   }
   return headers;
@@ -217,9 +236,12 @@ type CatalogProduct = {
   name: string;
   brand: string;
   category: string | null;
+  catalog_market: string | null;
   barcode: string | null;
   ingredient_text: string;
   image_url: string | null;
+  image_verification_status: string;
+  image_verified_at: string | null;
   description: string | null;
   source_type: string;
   source_name: string;
@@ -236,9 +258,12 @@ const PREVIEW_CATALOG: CatalogProduct[] = [
     name: 'Maggi noodles masala',
     brand: 'Nestlé',
     category: 'instant noodles',
+    catalog_market: 'India',
     barcode: '8901058000306',
     ingredient_text: 'Refined wheat flour, palm oil, iodized salt, wheat gluten, acidity regulators, spices, sugar.',
     image_url: 'https://images.openfoodfacts.org/images/products/890/105/800/0306/front_en.10.400.jpg',
+    image_verification_status: 'provider_barcode_match',
+    image_verified_at: null,
     description: 'A preview catalog record shown without the hosted API.',
     source_type: 'public_catalog',
     source_name: 'Open Food Facts',
@@ -250,6 +275,93 @@ const PREVIEW_CATALOG: CatalogProduct[] = [
     ingredients_available: true,
   },
 ];
+type PublicIndiaProduct = {
+  code?: string;
+  product_name?: string;
+  product_name_en?: string;
+  brands?: string;
+  categories?: string;
+  categories_en?: string;
+  image_front_url?: string;
+  ingredients_text?: string;
+  ingredients_text_en?: string;
+  url?: string;
+  lang?: string;
+};
+const catalogIdentityText = (value: string) =>
+  value
+    .toLocaleLowerCase()
+    .replace(/\b\d+(?:[.,]\d+)?\s*(?:kg|g|mg|l|ml|cl|oz|lb|fl\s*oz|ct|count|pack|pk|pcs?|pieces?)\b/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+const catalogProductScore = (product: CatalogProduct, query = '') => {
+  const name = product.name.toLocaleLowerCase();
+  const brand = product.brand.toLocaleLowerCase();
+  const term = query.trim().toLocaleLowerCase();
+  const relevance = !term ? 0 : name === term ? 500 : brand === term ? 450 : name.startsWith(term) ? 300 : brand.startsWith(term) ? 260 : 0;
+  const source = product.source_type === 'first_party_record' ? 5 : product.source_type === 'official_brand' ? 4 : product.source_type === 'public_catalog' ? 3 : 1;
+  const image = product.image_verification_status === 'first_party_record' ? 3 : product.image_verification_status === 'provider_barcode_match' ? 2 : product.image_verification_status === 'needs_review' ? 1 : 0;
+  return relevance + source * 10 + image * 4 + (product.ingredient_text.trim() ? 3 : 0) + Math.round(product.source_confidence * 3);
+};
+const deduplicateCatalogProducts = (products: CatalogProduct[], query = '') => {
+  const best = new Map<string, CatalogProduct>();
+  for (const product of products) {
+    const key = `${catalogIdentityText(product.brand)}|${catalogIdentityText(product.name)}`;
+    const current = best.get(key);
+    if (!current || catalogProductScore(product, query) > catalogProductScore(current, query)) best.set(key, product);
+  }
+  return [...best.values()].sort((a, b) => catalogProductScore(b, query) - catalogProductScore(a, query));
+};
+let publicIndiaCatalogPromise: Promise<CatalogProduct[]> | null = null;
+function publicIndiaCatalog(): Promise<CatalogProduct[]> {
+  if (publicIndiaCatalogPromise) return publicIndiaCatalogPromise;
+  const fields = 'code,product_name,product_name_en,brands,categories,categories_en,image_front_url,ingredients_text,ingredients_text_en,url,lang';
+  const endpoint = (page: number) => `https://world.openfoodfacts.net/api/v2/search?countries_tags_en=india&sort_by=popularity_key&page=${page}&page_size=120&fields=${encodeURIComponent(fields)}`;
+  publicIndiaCatalogPromise = Promise.all([1, 2].map(async (page) => {
+    const response = await fetch(endpoint(page));
+    if (!response.ok) throw new Error('Catalog preview unavailable');
+    const payload = await response.json() as { products?: PublicIndiaProduct[] };
+    return payload.products ?? [];
+  }))
+    .then((pages) => {
+      const seen = new Set<string>();
+      const products: CatalogProduct[] = [];
+      for (const item of pages.flat()) {
+        const language = item.lang?.toLowerCase() ?? '';
+        const name = item.product_name_en ?? (language.startsWith('en') ? item.product_name : null);
+        const ingredients = item.ingredients_text_en ?? (language.startsWith('en') ? item.ingredients_text : null);
+        if (!item.code || !name || !ingredients || !item.image_front_url || seen.has(item.code)) continue;
+        seen.add(item.code);
+        products.push({
+          id: `preview-india-${item.code}`,
+          name,
+          brand: item.brands || 'Brand not recorded',
+          category: item.categories_en ?? item.categories ?? 'packaged food',
+          catalog_market: 'India',
+          barcode: item.code,
+          ingredient_text: ingredients,
+          image_url: item.image_front_url,
+          image_verification_status: 'provider_barcode_match',
+          image_verified_at: null,
+          description: 'India-tagged public catalog record matched by barcode. Verify the package label before relying on an analysis.',
+          source_type: 'public_catalog',
+          source_name: 'Open Food Facts · India',
+          source_url: item.url ?? `https://world.openfoodfacts.org/product/${item.code}`,
+          source_confidence: 0.8,
+          label_verified_at: null,
+          source_retrieved_at: null,
+          is_demo: false,
+          ingredients_available: true,
+        });
+        if (products.length === 100) break;
+      }
+      const uniqueProducts = deduplicateCatalogProducts(products);
+      return uniqueProducts.length ? uniqueProducts : PREVIEW_CATALOG;
+    })
+    .catch(() => PREVIEW_CATALOG);
+  return publicIndiaCatalogPromise;
+}
 type ProfileSetup = {
   preferences: { ingredient: string; preferenceType: 'allergen' | 'sensitivity' | 'avoid' }[];
   dietaryPreferences: string[];
@@ -386,7 +498,7 @@ export default function Home() {
       };
       if (!response.ok)
         return payload.detail ?? 'We could not access that account.';
-      localStorage.setItem('ingredientiq_session', payload.access_token);
+      localStorage.setItem(SESSION_KEY, payload.access_token);
       setAccessToken(payload.access_token);
       setAccount(payload.account);
       setName(payload.account.display_name ?? payload.account.email.split('@')[0]);
@@ -403,7 +515,8 @@ export default function Home() {
         method: 'POST',
         headers: { Authorization: `Bearer ${accessToken}` },
       }).catch(() => undefined);
-    localStorage.removeItem('ingredientiq_session');
+    localStorage.removeItem(SESSION_KEY);
+    localStorage.removeItem(LEGACY_SESSION_KEY);
     setAccessToken(null);
     setAccount(null);
     setProfile(null);
@@ -641,9 +754,12 @@ export default function Home() {
                 item.product_source_name ??
                 'Unknown brand',
               category: item.product_category,
+              catalog_market: null,
               barcode: null,
               ingredient_text: item.raw_text,
               image_url: item.product_image_url,
+              image_verification_status: 'unavailable',
+              image_verified_at: null,
               description: null,
               source_type: item.product_source_type ?? 'saved_analysis',
               source_name: item.product_source_name ?? 'Saved analysis',
@@ -690,9 +806,12 @@ export default function Home() {
       name: item.product_name ?? 'Saved ingredient analysis',
       brand: item.product_brand ?? item.product_source_name ?? 'Saved analysis',
       category: item.product_category,
+      catalog_market: null,
       barcode: null,
       ingredient_text: item.raw_text,
       image_url: item.product_image_url,
+      image_verification_status: 'unavailable',
+      image_verified_at: null,
       description: 'Saved analysis label.',
       source_type: item.product_source_type ?? 'saved_analysis',
       source_name: item.product_source_name ?? 'Saved analysis',
@@ -712,7 +831,7 @@ export default function Home() {
     setPublicPreviewMode(isPublicPreview());
   }, []);
   useEffect(() => {
-    const savedToken = localStorage.getItem('ingredientiq_session');
+    const savedToken = storedSession();
     if (!savedToken) return;
     void fetch(`${API_BASE}/auth/me`, {
       headers: { Authorization: `Bearer ${savedToken}` },
@@ -727,7 +846,10 @@ export default function Home() {
         );
         setStage('app');
       })
-      .catch(() => localStorage.removeItem('ingredientiq_session'));
+      .catch(() => {
+        localStorage.removeItem(SESSION_KEY);
+        localStorage.removeItem(LEGACY_SESSION_KEY);
+      });
   }, []);
   useEffect(() => {
     if (!account) return;
@@ -947,10 +1069,8 @@ export default function Home() {
 
 function Brand() {
   return (
-    <span className="brand">
-      <span className="brand-wordmark">
-        ingredient<span>IQ</span>
-      </span>
+    <span className="brand" aria-label="Ingredia">
+      <span className="brand-wordmark">Ingredia</span>
     </span>
   );
 }
@@ -1023,7 +1143,7 @@ function Landing({
           </h1>
           <p>
             Paste an ingredient list, scan a package, or search a product.
-            IngredientIQ recognizes label terms, connects them to source
+            Ingredia recognizes label terms, connects them to source
             records, and highlights what matters to your own food context.
           </p>
           <div className="landing-actions">
@@ -1077,7 +1197,7 @@ function Landing({
           </div>
           <div className="analysis-card">
             <div className="analysis-card__top">
-              <span>IngredientIQ analysis</span>
+              <span>Ingredia analysis</span>
               <i>
                 <Sparkles size={13} /> Live
               </i>
@@ -1115,10 +1235,10 @@ function Landing({
       </section>
       <section className="product-story" id="product-story">
         <div className="product-story__intro">
-          <p className="eyebrow">What IngredientIQ actually does</p>
+          <p className="eyebrow">What Ingredia actually does</p>
           <h2>From package text to a decision you can understand.</h2>
           <p>
-            IngredientIQ does not guess from a product name. It reads the
+            Ingredia does not guess from a product name. It reads the
             ingredient information you provide or retrieve from the catalog,
             resolves familiar and alternate ingredient terms, then layers
             source-backed evidence and your selected needs on top.
@@ -1126,7 +1246,7 @@ function Landing({
         </div>
         <div
           className="product-flow"
-          aria-label="IngredientIQ analysis pipeline"
+          aria-label="Ingredia analysis pipeline"
         >
           <article>
             <span className="flow-number">01</span>
@@ -1275,7 +1395,7 @@ function AuthPage({
           </h1>
           <p>
             {isSignup
-              ? 'Create your IngredientIQ account, then build the personal context that makes label analysis more relevant to you.'
+              ? 'Create your Ingredia account, then build the personal context that makes label analysis more relevant to you.'
               : 'Pick up where you left off—your saved analyses, catalog checks, and food context are ready.'}
           </p>
         </div>
@@ -1284,11 +1404,11 @@ function AuthPage({
             <p className="eyebrow">{isSignup ? 'Create account' : 'Sign in'}</p>
             <h2>
               {isSignup
-                ? 'Start your IngredientIQ profile.'
+                ? 'Start your Ingredia profile.'
                 : 'Good to see you again.'}
             </h2>
             <p>
-              {isSignup ? 'Already have an account?' : 'New to IngredientIQ?'}{' '}
+              {isSignup ? 'Already have an account?' : 'New to Ingredia?'}{' '}
               <button onClick={onSwitch}>
                 {isSignup ? 'Log in' : 'Create an account'}
               </button>
@@ -1340,7 +1460,7 @@ function AuthPage({
               <label className="terms-row">
                 <input type="checkbox" required />{' '}
                 <span>
-                  I agree to the terms and understand IngredientIQ is not
+                  I agree to the terms and understand Ingredia is not
                   medical advice.
                 </span>
               </label>
@@ -1699,7 +1819,7 @@ function Onboarding({
                   <span>ready for labels.</span>
                 </h1>
                 <p className="lead">
-                  {name ? `${name}, IngredientIQ` : 'IngredientIQ'} will use this context to surface relevance
+                  {name ? `${name}, Ingredia` : 'Ingredia'} will use this context to surface relevance
                   without changing the general, evidence-backed assessment.
                 </p>
                 <div className="profile-summary onboarding-summary">
@@ -2224,6 +2344,7 @@ function AnalysisResult({
 }) {
   const personal = analysis.ingredients.filter((item) => item.personal_alert);
   const coverage = Math.round(analysis.summary.coverage * 100);
+  const evidenceLinked = analysis.ingredients.filter((item) => item.evidence.length > 0).length;
   return (
     <section className="results-section">
       <div className="product-summary">
@@ -2289,6 +2410,35 @@ function AnalysisResult({
           {personal.length > 0 && <span>Detected from your profile</span>}
         </article>
       </div>
+      <section className="traceability-panel" aria-label="How Ingredia reached this result">
+        <div className="traceability-panel__heading">
+          <p className="eyebrow">Ingredia trace</p>
+          <h3>How this result was reached</h3>
+          <p>
+            This is not a black-box score. Each step below remains visible so
+            you can check what was matched, what was uncertain, and why a
+            personal alert appears.
+          </p>
+        </div>
+        <ol className="traceability-steps">
+          <li>
+            <span>01</span>
+            <div><b>Read the label</b><small>{analysis.summary.parsed_ingredients} declared terms were parsed from the ingredient list.</small></div>
+          </li>
+          <li>
+            <span>02</span>
+            <div><b>Resolve aliases</b><small>{analysis.summary.resolved_ingredients} terms matched canonical ingredient records; unknown terms stay neutral.</small></div>
+          </li>
+          <li>
+            <span>03</span>
+            <div><b>Apply evidence in context</b><small>{evidenceLinked} matched ingredients have source-linked evidence assessed for this product context.</small></div>
+          </li>
+          <li>
+            <span>04</span>
+            <div><b>Keep your context separate</b><small>{personal.length ? `${personal.length} personal profile match${personal.length === 1 ? '' : 'es'} shown separately from the evidence score.` : 'No personal profile matches; the evidence score remains independent either way.'}</small></div>
+          </li>
+        </ol>
+      </section>
       {personal.length > 0 && (
         <div className="personal-banner">
           <AlertTriangle size={19} />
@@ -2952,6 +3102,7 @@ function CatalogPage({
     [error, setError] = useState<string | null>(null),
     [emptyMessage, setEmptyMessage] = useState<string | null>(null),
     [catalogNotice, setCatalogNotice] = useState<string | null>(null),
+    [marketFilter, setMarketFilter] = useState<string | null>(null),
     [analyzing, setAnalyzing] = useState<string | null>(null),
     [scanning, setScanning] = useState(false);
   const [reportProduct, setReportProduct] = useState<CatalogProduct | null>(
@@ -2978,25 +3129,34 @@ function CatalogPage({
     const controller = new AbortController();
     setLoading(true);
     const trimmed = initialQuery.trim();
+    const marketParameter = marketFilter ? `&market=${encodeURIComponent(marketFilter)}` : '';
     const endpoint = trimmed
-      ? `${API_BASE}/products?query=${encodeURIComponent(trimmed)}`
-      : `${API_BASE}/products?limit=120`;
+      ? `${API_BASE}/products?query=${encodeURIComponent(trimmed)}${marketParameter}`
+      : `${API_BASE}/products?limit=120${marketParameter}`;
     void fetch(endpoint, { signal: controller.signal })
       .then(async (response) => {
         if (!response.ok) throw new Error();
         const products = (await response.json()) as CatalogProduct[];
-        setResults(products);
+        const uniqueProducts = deduplicateCatalogProducts(products, trimmed);
+        setResults(uniqueProducts);
         setCatalogNotice(null);
         setEmptyMessage(
-          products.length
+          uniqueProducts.length
             ? null
             : 'The catalog is ready, but it does not contain any stored products yet.',
         );
       })
-      .catch((cause: unknown) => {
+      .catch(async (cause: unknown) => {
         if (cause instanceof DOMException && cause.name === 'AbortError') return;
         if (isPublicPreview()) {
-          setResults(PREVIEW_CATALOG);
+          const previewProducts = await publicIndiaCatalog();
+          if (controller.signal.aborted) return;
+          setResults(previewProducts);
+          setCatalogNotice(
+            previewProducts.length > 1
+              ? `Showing ${previewProducts.length} Popular in India preview products.`
+              : 'Showing the available India catalog preview product.',
+          );
           setEmptyMessage(null);
           return;
         }
@@ -3006,7 +3166,7 @@ function CatalogPage({
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [initialQuery]);
+  }, [initialQuery, marketFilter]);
   async function search(value = query, barcode = false) {
     setLoading(true);
     setError(null);
@@ -3015,12 +3175,15 @@ function CatalogPage({
     try {
       const trimmed = value.trim();
       const parameter = barcode ? 'barcode' : 'query';
+      const marketParameter = marketFilter ? `&market=${encodeURIComponent(marketFilter)}` : '';
       const endpoint = trimmed
-        ? `${API_BASE}/products?${parameter}=${encodeURIComponent(trimmed)}`
-        : `${API_BASE}/products?limit=120`;
+        ? `${API_BASE}/products?${parameter}=${encodeURIComponent(trimmed)}${marketParameter}`
+        : `${API_BASE}/products?limit=120${marketParameter}`;
       const response = await fetch(endpoint);
       if (!response.ok) throw new Error();
-      const next = (await response.json()) as CatalogProduct[];
+      const next = deduplicateCatalogProducts(
+        (await response.json()) as CatalogProduct[], trimmed,
+      );
       const resultStatus = response.headers.get('X-Catalog-Result');
       setResults(next);
       if (next.length && resultStatus === 'external_match')
@@ -3036,12 +3199,13 @@ function CatalogPage({
     } catch {
       if (isPublicPreview()) {
         const normalized = value.trim().toLocaleLowerCase();
+        const previewProducts = await publicIndiaCatalog();
         setResults(
-          PREVIEW_CATALOG.filter((item) =>
+          deduplicateCatalogProducts(previewProducts.filter((item) =>
             `${item.name} ${item.brand} ${item.barcode}`
               .toLocaleLowerCase()
               .includes(normalized),
-          ),
+          ), value),
         );
         return;
       }
@@ -3165,6 +3329,12 @@ function CatalogPage({
       <button className="catalog-explorer-link" onClick={() => setCatalogMode('ingredients')}>
         <Search size={15} /> Explore ingredient records <ArrowRight size={15} />
       </button>
+      <button
+        className={`catalog-india-filter ${marketFilter === 'India' ? 'active' : ''}`}
+        onClick={() => setMarketFilter((current) => current === 'India' ? null : 'India')}
+      >
+        {marketFilter === 'India' ? 'Showing Popular in India · Clear filter' : 'Browse Popular in India'}
+      </button>
       <form
         className="search-field"
         onSubmit={(event) => {
@@ -3264,6 +3434,9 @@ function CatalogPage({
               ) : (
                 <Layers3 size={20} />
               )}
+              <span className={`image-verification image-verification--${item.image_verification_status}`}>
+                {imageVerificationLabel(item)}
+              </span>
             </div>
             <div className="catalog-card-body">
               <p className="eyebrow">
@@ -3289,6 +3462,11 @@ function CatalogPage({
                     Label verified{' '}
                     {new Date(item.label_verified_at).toLocaleDateString()}
                   </small>
+                )}
+                {item.catalog_market === 'India' && (
+                  <Badge variant="outline" className="catalog-market-badge">
+                    Popular in India
+                  </Badge>
                 )}
                 {item.description?.startsWith('English translation of') && (
                   <Badge variant="outline" className="catalog-translation-badge">
@@ -3435,6 +3613,11 @@ function CatalogPage({
                 {detailProduct.description?.startsWith('English translation of') && <Badge variant="outline" className="catalog-translation-badge">Translated to English</Badge>}
                 <p>{detailProduct.ingredient_text || 'Ingredient label is not available for this record.'}</p>
                 <p className="product-detail-meta">Barcode: {detailProduct.barcode ?? 'Not recorded'} · Source: {detailProduct.source_name}</p>
+                <p className="product-detail-meta">
+                  Image: {imageVerificationLabel(detailProduct)}
+                  {detailProduct.image_verified_at ? ` · Checked ${new Date(detailProduct.image_verified_at).toLocaleDateString()}` : ''}
+                </p>
+                {detailProduct.catalog_market === 'India' && <Badge variant="outline" className="catalog-market-badge">Popular in India</Badge>}
                 {detailProduct.source_url && <a href={detailProduct.source_url} target="_blank" rel="noreferrer" className="catalog-source-link">Open source record <ArrowRight size={13} /></a>}
               </div>
             </div>

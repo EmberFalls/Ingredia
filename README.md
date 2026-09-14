@@ -21,8 +21,11 @@ The frontend expects the API at `http://127.0.0.1:8000/api/v1` by default. Set `
 
 ```powershell
 cd backend
-python -m pip install -e ".[dev]"
-python -m uvicorn app.main:app --reload
+# Use Python 3.11–3.13. A virtual environment prevents incompatible global
+# packages from affecting the API or its tests.
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
 ```
 
 Open `http://127.0.0.1:8000/docs` for interactive API documentation. The application creates and seeds a local SQLite database on startup.
@@ -31,7 +34,7 @@ Open `http://127.0.0.1:8000/docs` for interactive API documentation. The applica
 
 ```powershell
 cd backend
-python -m pytest
+.\.venv\Scripts\python.exe -m pytest -p no:cacheprovider
 ```
 
 ## Implemented API

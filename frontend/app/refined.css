@@ -3,15 +3,7 @@
   gap: 0;
 }
 .brand-wordmark {
-  color: #17231f;
-  font-size: 1.15rem;
-  font-weight: 760;
-  letter-spacing: -0.075em;
-}
-.brand-wordmark span {
-  margin-left: 0.08rem;
-  color: var(--teal);
-  font-weight: 560;
+  font-size: 1.3rem;
 }
 .auth-page {
   grid-template-columns: minmax(0, 46%) minmax(0, 54%);
@@ -636,6 +628,7 @@
   outline: none;
 }
 .catalog-results .catalog-product-mark {
+  position: relative;
   width: 5.25rem;
   height: 5.25rem;
   flex-basis: 5.25rem;
@@ -693,6 +686,32 @@
 .catalog-results article:hover .catalog-product-mark img {
   transform: scale(1.035);
 }
+.image-verification {
+  position: absolute;
+  right: 0.55rem;
+  bottom: 0.55rem;
+  max-width: calc(100% - 1.1rem);
+  padding: 0.28rem 0.45rem;
+  border: 1px solid #acd6c7;
+  border-radius: 999px;
+  color: #0d604f;
+  background: #f4fcf8e8;
+  font-size: 0.62rem;
+  font-weight: 800;
+  line-height: 1.2;
+  text-align: center;
+  backdrop-filter: blur(5px);
+}
+.image-verification--provider_barcode_match {
+  border-color: #b9d8ec;
+  color: #1c628b;
+  background: #f2f9fde8;
+}
+.image-verification--unavailable {
+  border-color: #e4cbb9;
+  color: #965332;
+  background: #fff8f3e8;
+}
 .catalog-card-body {
   display: flex;
   flex-direction: column;
@@ -723,6 +742,12 @@
   background: #eff8fd;
   font-size: 0.64rem;
 }
+.catalog-market-badge {
+  border-color: #e7c487;
+  color: #8a5713;
+  background: #fff8e9;
+  font-size: 0.64rem;
+}
 .catalog-ingredients {
   display: -webkit-box;
   overflow: hidden;
@@ -740,6 +765,52 @@
 .catalog-card-actions button {
   width: 100%;
 }
+.traceability-panel {
+  margin: 1.35rem 0;
+  padding: 1.15rem;
+  border: 1px solid #bddfd3;
+  border-radius: 1.15rem;
+  background: linear-gradient(135deg, #f2fbf7, #f8fcfa);
+}
+.traceability-panel__heading h3 {
+  margin: 0.2rem 0 0.4rem;
+  color: #183f35;
+  font-size: 1.15rem;
+}
+.traceability-panel__heading > p:not(.eyebrow) {
+  max-width: 42rem;
+  margin: 0;
+  color: #5e766d;
+  font-size: 0.82rem;
+  line-height: 1.55;
+}
+.traceability-steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.65rem;
+  padding: 0;
+  margin: 1rem 0 0;
+  list-style: none;
+}
+.traceability-steps li {
+  display: grid;
+  gap: 0.45rem;
+  min-width: 0;
+  padding: 0.8rem;
+  border: 1px solid #d7ebe3;
+  border-radius: 0.85rem;
+  background: #fff;
+}
+.traceability-steps span {
+  color: #16816b;
+  font-size: 0.66rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+.traceability-steps b,
+.traceability-steps small { display: block; }
+.traceability-steps b { color: #254b41; font-size: 0.78rem; }
+.traceability-steps small { margin-top: 0.25rem; color: #6b8279; font-size: 0.7rem; line-height: 1.45; }
 @keyframes catalog-card-in {
   from {
     opacity: 0;
@@ -789,6 +860,18 @@
   font-weight: 800;
 }
 .catalog-explorer-link:hover { text-decoration: underline; }
+.catalog-india-filter {
+  margin-left: 0.85rem;
+  padding: 0.42rem 0.65rem;
+  border: 1px solid #ebcf95;
+  border-radius: 999px;
+  color: #895614;
+  background: #fff9ec;
+  font-size: 0.74rem;
+  font-weight: 800;
+  transition: 0.2s ease;
+}
+.catalog-india-filter:hover, .catalog-india-filter.active { border-color: #cf9e53; background: #fff0cb; }
 .catalog-compare-bar {
   display: flex;
   align-items: center;
@@ -857,6 +940,7 @@
   .guest-nav-actions .nav-text-button {
     display: none;
   }
+  .traceability-steps { grid-template-columns: 1fr 1fr; }
 }
 .workspace-hero {
   padding-top: clamp(3.5rem, 7vw, 6.5rem);

@@ -1,6 +1,9 @@
 from fastapi.testclient import TestClient
+from sqlalchemy import func, select
 from uuid import uuid4
 
+from app.db.database import SessionLocal
+from app.db.models import Product
 from app.main import app
 from app.services.product_discovery import ProductDiscoveryService
 
@@ -100,13 +103,15 @@ def test_seeded_catalog_contains_image_backed_sourced_products() -> None:
     assert response.status_code == 200
     products = response.json()
     assert len(products) >= 100
-    sourced = [product for product in products if product["source_type"] == "official_brand"]
-    demo = [product for product in products if product["source_type"] == "demo"]
-    assert len(sourced) >= 100
-    assert all(product["image_url"] for product in sourced)
-    assert all(product["source_url"] for product in sourced)
-    assert all(product["ingredient_text"] for product in sourced)
-    assert demo == []
+    with SessionLocal() as db:
+        sourced_count = db.scalar(select(func.count()).select_from(Product).where(Product.source_type == "official_brand"))
+        demo_count = db.scalar(select(func.count()).select_from(Product).where(Product.source_type == "demo"))
+        sourced = db.scalars(select(Product).where(Product.source_type == "official_brand")).all()
+    assert sourced_count >= 100
+    assert demo_count == 0
+    assert all(product.image_url for product in sourced)
+    assert all(product.source_url for product in sourced)
+    assert all(product.ingredient_text for product in sourced)
 
 
 def test_catalog_image_endpoint_falls_back_to_a_local_label(monkeypatch) -> None:

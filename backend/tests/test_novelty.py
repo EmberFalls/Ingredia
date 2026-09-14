@@ -72,6 +72,24 @@ def test_score_contributors_are_traceable_to_evidence() -> None:
     assert round(sum(item["contribution"] for item in contributors)) == body["summary"]["concern_score"]
 
 
+def test_multiple_source_backed_evidence_records_are_exposed_without_score_inflation() -> None:
+    """Limonene demonstrates separate evidence records with distinct roles.
+
+    The regulatory labelling record is informative (zero severity) while the
+    sensitization record is the only one that contributes to the general score.
+    """
+    with TestClient(app) as client:
+        body = client.post("/api/v1/analyses/text", json={
+            "ingredient_text": "Limonene",
+            "product_category": "personal_care",
+        }).json()
+    limonene = body["ingredients"][0]
+    evidence = {record["concern_type"]: record for record in limonene["evidence"]}
+    assert {"sensitization", "cosmetic_allergen_labelling"}.issubset(evidence)
+    assert all(record["source_url"].startswith("https://") for record in evidence.values())
+    assert limonene["concern_score"] == 14
+
+
 def test_repeated_encounters_count_once_per_saved_analysis() -> None:
     user_id = f"encounters-{uuid4()}"
     with TestClient(app) as client:

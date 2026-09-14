@@ -3,6 +3,8 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .venv/
+*.egg-info/
+frontend/*.tar.gz
 
 # Local backend runtime artifacts
 backend/.python-deps/

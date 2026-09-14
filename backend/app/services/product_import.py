@@ -37,18 +37,27 @@ class ProductImportService:
         if not product:
             product = Product(name=item.name, brand=item.brand or "Unknown brand", ingredient_text="")
             self.db.add(product)
+        retrieved_at = datetime.now(timezone.utc)
         product.name = item.name
         product.brand = item.brand or "Unknown brand"
         product.category = item.category
+        product.catalog_market = item.country
         product.barcode = barcode
         product.ingredient_text = item.ingredient_text or ""
         product.description = item.description
         product.image_url = str(item.image_url) if item.image_url else None
+        # Public-provider image URLs are only used after a barcode-resolved
+        # product lookup. They are still marked as provider records rather
+        # than being represented as first-party manufacturer verification.
+        product.image_verification_status = (
+            "provider_barcode_match" if item.image_url and barcode else "unavailable"
+        )
+        product.image_verified_at = retrieved_at if item.image_url and barcode else None
         product.source_type = "public_catalog"
         product.source_name = item.provider
         product.source_url = str(item.product_url) if item.product_url else None
         product.source_confidence = item.source_confidence
-        product.source_retrieved_at = datetime.now(timezone.utc)
+        product.source_retrieved_at = retrieved_at
         product.is_demo = False
         self.db.commit()
         self.db.refresh(product)

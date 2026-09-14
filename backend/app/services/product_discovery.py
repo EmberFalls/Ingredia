@@ -18,8 +18,8 @@ class ProductDiscoveryService:
         self.importer = ProductImportService(db)
         self.settings = get_settings()
 
-    async def search(self, *, query: str | None = None, brand: str | None = None, category: str | None = None, barcode: str | None = None, limit: int = 20) -> tuple[list[Product], str]:
-        local = self.local.search(query=query, brand=brand, category=category, barcode=barcode, limit=limit)
+    async def search(self, *, query: str | None = None, brand: str | None = None, category: str | None = None, market: str | None = None, barcode: str | None = None, limit: int = 20) -> tuple[list[Product], str]:
+        local = self.local.search(query=query, brand=brand, category=category, market=market, barcode=barcode, limit=limit)
         # Checked-in official records are stable. Public-catalog records are a
         # cache, however, and must be refreshed so older translated-or-not
         # provider payloads cannot keep resurfacing ahead of the English-only
@@ -46,5 +46,11 @@ class ProductDiscoveryService:
                 candidates = []
         except ProductProviderUnavailable:
             return [], "external_unavailable"
-        products = [self.importer.upsert(item) for item in candidates if item]
+        products = ProductSearchService.rank_and_deduplicate(
+            (self.importer.upsert(item) for item in candidates if item),
+            query=query,
+            brand=brand,
+            barcode=barcode,
+            limit=limit,
+        )
         return products, "external_match" if products else "no_match"

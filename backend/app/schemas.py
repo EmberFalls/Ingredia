@@ -117,9 +117,12 @@ class ProductOut(BaseModel):
     name: str
     brand: str
     category: str | None
+    catalog_market: str | None
     barcode: str | None
     ingredient_text: str
     image_url: str | None
+    image_verification_status: str
+    image_verified_at: datetime | None
     description: str | None
     source_type: str
     source_name: str

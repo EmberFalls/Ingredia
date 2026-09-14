@@ -2,7 +2,10 @@
 name = "ingredient-intelligence-api"
 version = "0.1.0"
 description = "Explainable ingredient analysis API"
-requires-python = ">=3.11"
+# The native dependencies used by the local API/test runtime are verified on
+# these Python versions.  Python 3.14 currently loaded an incompatible cached
+# pydantic-core binary on this machine, so keep the supported range explicit.
+requires-python = ">=3.11,<3.14"
 dependencies = [
   "fastapi>=0.115,<1.0",
   "pydantic-settings>=2.6,<3.0",

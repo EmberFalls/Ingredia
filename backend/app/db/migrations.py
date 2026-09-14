@@ -10,6 +10,9 @@ from sqlalchemy.engine import Engine
 
 PRODUCT_COLUMNS = {
     "barcode": "VARCHAR(32)",
+    "catalog_market": "VARCHAR(80)",
+    "image_verification_status": "VARCHAR(48) NOT NULL DEFAULT 'unavailable'",
+    "image_verified_at": "DATETIME",
     "source_type": "VARCHAR(40) NOT NULL DEFAULT 'demo'",
     "source_name": "VARCHAR(160) NOT NULL DEFAULT 'Local development catalog'",
     "source_url": "VARCHAR(500)",
@@ -76,6 +79,7 @@ def apply_local_schema_migrations(engine: Engine) -> None:
                 if name not in existing_products:
                     connection.execute(text(f"ALTER TABLE products ADD COLUMN {name} {definition}"))
             connection.execute(text("CREATE INDEX IF NOT EXISTS idx_products_barcode ON products (barcode)"))
+            connection.execute(text("CREATE INDEX IF NOT EXISTS idx_products_catalog_market ON products (catalog_market)"))
         if "scan_history" in tables:
             existing_history = {column["name"] for column in inspector.get_columns("scan_history")}
             for name, definition in SCAN_HISTORY_COLUMNS.items():
